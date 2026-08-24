@@ -29,6 +29,8 @@ export function useCreateService() {
       if (!user) throw new Error("No hay sesión activa");
 
       // 1. Insert the service
+      // NOTE: project_id column added by geoerp PR #216 migration but not yet
+      // in database.generated.ts — cast to bypass until types are regenerated.
       const { data: service, error } = await supabase
         .from("services")
         .insert({
@@ -39,7 +41,7 @@ export function useCreateService() {
           status: "to_open" satisfies ServiceStatus,
           geometry: `POINT(${input.longitude} ${input.latitude})`,
           created_by: user.id,
-        })
+        } as any)
         .select()
         .single();
 
