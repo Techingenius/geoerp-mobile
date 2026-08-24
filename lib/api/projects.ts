@@ -69,6 +69,7 @@ export function useProjectServices(projectId: string) {
       const { data: directServices, error: directError } = await supabase
         .from("services")
         .select("*, line_segment:line_segments(id, name, project_id)")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .eq("project_id" as any, projectId)
         .order("created_at", { ascending: false });
 
@@ -78,6 +79,7 @@ export function useProjectServices(projectId: string) {
       const { data: linkedServices, error: linkedError } = await supabase
         .from("services")
         .select("*, line_segment:line_segments!inner(id, name, project_id)")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .is("project_id" as any, null)
         .eq("line_segment.project_id", projectId)
         .order("created_at", { ascending: false });

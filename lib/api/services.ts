@@ -41,6 +41,7 @@ export function useCreateService() {
           status: "to_open" satisfies ServiceStatus,
           geometry: `POINT(${input.longitude} ${input.latitude})`,
           created_by: user.id,
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         } as any)
         .select()
         .single();
