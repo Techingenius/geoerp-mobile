@@ -26,11 +26,9 @@ export default function LoginScreen() {
 
     try {
       await signIn(email.trim(), password);
-    } catch (error: any) {
-      Alert.alert(
-        "Error de autenticación",
-        error.message || "Credenciales incorrectas"
-      );
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "Credenciales incorrectas";
+      Alert.alert("Error de autenticación", message);
     }
   };
 

@@ -72,7 +72,7 @@ export default function ProjectDetailScreen() {
   const [serviceType, setServiceType] = useState("");
   const [serviceNotes, setServiceNotes] = useState("");
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
-  const [selectedService, setSelectedService] = useState<Service | null>(null);
+  const [_selectedService, setSelectedService] = useState<Service | null>(null);
 
   if (loadingProject) {
     return (
@@ -206,8 +206,9 @@ export default function ProjectDetailScreen() {
       });
       resetModal();
       Alert.alert("Servicio creado", "El servicio se registró exitosamente");
-    } catch (error: any) {
-      Alert.alert("Error", error.message || "No se pudo crear el servicio");
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : "No se pudo crear el servicio";
+      Alert.alert("Error", message);
     }
   };
 

@@ -10,7 +10,7 @@ export default function MapTabScreen() {
           Mapa general
         </Text>
         <Text className="text-gray-400 text-center mt-2">
-          Selecciona un proyecto desde la pestaña "Proyectos" para ver su mapa
+          Selecciona un proyecto desde la pestaña &quot;Proyectos&quot; para ver su mapa
           con tramos y servicios.
         </Text>
       </View>
