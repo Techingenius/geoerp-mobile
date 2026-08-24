@@ -36,40 +36,71 @@ export interface Project {
   updated_at: string;
 }
 
-export interface Segment {
+export interface LineSegment {
   id: string;
   project_id: string;
   name: string;
-  geometry: GeoJSON.LineString;
-  status: string;
+  description: string | null;
+  ticket_number: string | null;
+  geometry: {
+    type: "LineString";
+    coordinates: [number, number][];
+  };
+  properties: Record<string, unknown>;
+  created_by: string | null;
   created_at: string;
+  updated_at: string;
 }
 
-export type ServiceStatus =
-  | "pending"
-  | "located"
-  | "approved"
-  | "completed"
-  | "not_found";
+export type ServiceType =
+  | "gas"
+  | "power"
+  | "water"
+  | "telecom"
+  | "sewer"
+  | "other";
+
+export type ServiceStatus = "to_open" | "found" | "not_found";
 
 export interface Service {
   id: string;
-  project_id: string;
-  segment_id: string | null;
-  service_type: string;
-  description: string | null;
+  line_segment_id: string | null;
+  service_type: ServiceType;
   status: ServiceStatus;
-  location: {
+  depth_feet: number | null;
+  drill_depth_feet: number | null;
+  geometry: {
     type: "Point";
     coordinates: [number, number]; // [lng, lat]
   };
-  service_line: {
-    type: "LineString";
-    coordinates: [number, number][];
-  } | null;
-  reported_by: string | null;
+  notes: string | null;
+  marked_by: string | null;
+  opened_by: string | null;
+  created_by: string | null;
   created_at: string;
   updated_at: string;
+  // Joined relation (when queried with line_segment:line_segments)
+  line_segment?: {
+    id: string;
+    name: string;
+    project_id: string;
+  } | null;
+}
+
+export interface ServicePhoto {
+  id: string;
+  service_id: string;
+  storage_path: string;
+  filename: string;
+  caption: string | null;
+  photo_type: "evidence" | "not_found_proof" | "depth_measurement" | null;
+  taken_at: string | null;
+  location: {
+    type: "Point";
+    coordinates: [number, number];
+  } | null;
+  uploaded_by: string | null;
+  created_at: string;
 }
 
 export interface Task {

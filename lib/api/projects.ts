@@ -1,6 +1,6 @@
 import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../supabase/client";
-import type { Project, Segment, Service, PreExistingDamage } from "../../types/database";
+import type { Project, LineSegment, Service, PreExistingDamage } from "../../types/database";
 
 export function useProjects() {
   return useQuery({
@@ -37,32 +37,39 @@ export function useProject(projectId: string) {
 export function useProjectSegments(projectId: string) {
   return useQuery({
     queryKey: ["segments", projectId],
-    queryFn: async (): Promise<Segment[]> => {
+    queryFn: async (): Promise<LineSegment[]> => {
       const { data, error } = await supabase
-        .from("segments")
+        .from("line_segments")
         .select("*")
         .eq("project_id", projectId)
         .order("name");
 
       if (error) throw error;
-      return data;
+      return data as unknown as LineSegment[];
     },
     enabled: !!projectId,
   });
 }
 
+/**
+ * Fetch services for a project by joining through line_segments.
+ * Services don't have a direct project_id FK — they reference line_segment_id,
+ * and line_segments reference project_id.
+ */
 export function useProjectServices(projectId: string) {
   return useQuery({
     queryKey: ["services", projectId],
     queryFn: async (): Promise<Service[]> => {
       const { data, error } = await supabase
         .from("services")
-        .select("*")
-        .eq("project_id", projectId)
+        .select(
+          "*, line_segment:line_segments!inner(id, name, project_id)"
+        )
+        .eq("line_segment.project_id", projectId)
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      return data;
+      return (data as unknown as Service[]) ?? [];
     },
     enabled: !!projectId,
   });
