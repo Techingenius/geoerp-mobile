@@ -2,6 +2,9 @@ import { useQuery } from "@tanstack/react-query";
 import { supabase } from "../supabase/client";
 import type { Project, LineSegment, Service, PreExistingDamage } from "../../types/database";
 
+// PostGIS geometry comes as `unknown` from the Supabase client.
+// We cast at the query boundary since we know the runtime shape is GeoJSON.
+
 export function useProjects() {
   return useQuery({
     queryKey: ["projects"],
@@ -45,7 +48,7 @@ export function useProjectSegments(projectId: string) {
         .order("name");
 
       if (error) throw error;
-      return data as unknown as LineSegment[];
+      return data as LineSegment[];
     },
     enabled: !!projectId,
   });
@@ -69,7 +72,7 @@ export function useProjectServices(projectId: string) {
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      return (data as unknown as Service[]) ?? [];
+      return (data as Service[]) ?? [];
     },
     enabled: !!projectId,
   });
@@ -86,7 +89,7 @@ export function useProjectDamages(projectId: string) {
         .order("reported_at", { ascending: false });
 
       if (error) throw error;
-      return data ?? [];
+      return (data as PreExistingDamage[]) ?? [];
     },
     enabled: !!projectId,
   });
