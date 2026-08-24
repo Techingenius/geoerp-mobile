@@ -38,13 +38,20 @@
   },
   "devDependencies": {
     "@types/react": "~19.2.2",
+    "@typescript-eslint/eslint-plugin": "^7.18.0",
+    "@typescript-eslint/parser": "^7.18.0",
+    "eslint": "^8.57.1",
+    "eslint-plugin-react": "^7.37.5",
+    "eslint-plugin-react-hooks": "^4.6.2",
     "typescript": "~6.0.3"
   },
   "scripts": {
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web"
+    "web": "expo start --web",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint . --ext .ts,.tsx"
   },
   "private": true
 }

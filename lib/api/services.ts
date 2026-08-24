@@ -1,6 +1,6 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../supabase/client";
-import type { ServiceStatus, ServicePhoto } from "../../types/database";
+import type { ServiceStatus } from "../../types/database";
 
 interface CreateServiceInput {
   line_segment_id?: string;
