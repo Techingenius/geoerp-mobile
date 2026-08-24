@@ -198,6 +198,7 @@ export default function ProjectDetailScreen() {
   const submitService = async () => {
     try {
       await createService.mutateAsync({
+        project_id: id,
         service_type: serviceType,
         notes: serviceNotes || undefined,
         latitude: location!.latitude,

@@ -3,6 +3,7 @@ import { supabase } from "../supabase/client";
 import type { ServiceStatus } from "../../types/database";
 
 interface CreateServiceInput {
+  project_id: string;
   line_segment_id?: string;
   service_type: string;
   notes?: string;
@@ -31,6 +32,7 @@ export function useCreateService() {
       const { data: service, error } = await supabase
         .from("services")
         .insert({
+          project_id: input.project_id,
           line_segment_id: (input.line_segment_id ?? null) as string,
           service_type: input.service_type,
           notes: input.notes ?? null,

@@ -55,24 +55,43 @@ export function useProjectSegments(projectId: string) {
 }
 
 /**
- * Fetch services for a project by joining through line_segments.
- * Services don't have a direct project_id FK — they reference line_segment_id,
- * and line_segments reference project_id.
+ * Fetch services for a project.
+ * Uses project_id directly (mobile-created services) OR via line_segments join (legacy).
+ * Two queries merged: services with project_id + services via line_segment.
  */
 export function useProjectServices(projectId: string) {
   return useQuery({
     queryKey: ["services", projectId],
     queryFn: async (): Promise<Service[]> => {
-      const { data, error } = await supabase
+      // Fetch services that have project_id set directly (mobile-created)
+      const { data: directServices, error: directError } = await supabase
         .from("services")
-        .select(
-          "*, line_segment:line_segments!inner(id, name, project_id)"
-        )
+        .select("*, line_segment:line_segments(id, name, project_id)")
+        .eq("project_id", projectId)
+        .order("created_at", { ascending: false });
+
+      if (directError) throw directError;
+
+      // Also fetch services linked via line_segments (legacy web-created)
+      const { data: linkedServices, error: linkedError } = await supabase
+        .from("services")
+        .select("*, line_segment:line_segments!inner(id, name, project_id)")
+        .is("project_id", null)
         .eq("line_segment.project_id", projectId)
         .order("created_at", { ascending: false });
 
-      if (error) throw error;
-      return (data as Service[]) ?? [];
+      if (linkedError) throw linkedError;
+
+      // Merge and deduplicate by id
+      const allServices = [...(directServices ?? []), ...(linkedServices ?? [])];
+      const seen = new Set<string>();
+      const unique = allServices.filter((s) => {
+        if (seen.has(s.id)) return false;
+        seen.add(s.id);
+        return true;
+      });
+
+      return unique as Service[];
     },
     enabled: !!projectId,
   });
