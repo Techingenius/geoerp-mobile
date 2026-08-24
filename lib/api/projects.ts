@@ -64,13 +64,10 @@ export function useProjectServices(projectId: string) {
     queryKey: ["services", projectId],
     queryFn: async (): Promise<Service[]> => {
       // Fetch services that have project_id set directly (mobile-created)
-      // NOTE: project_id column added by geoerp PR #216 — cast column name
-      // until database.generated.ts is regenerated with the new schema.
       const { data: directServices, error: directError } = await supabase
         .from("services")
         .select("*, line_segment:line_segments(id, name, project_id)")
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .eq("project_id" as any, projectId)
+        .eq("project_id", projectId)
         .order("created_at", { ascending: false });
 
       if (directError) throw directError;
@@ -79,8 +76,7 @@ export function useProjectServices(projectId: string) {
       const { data: linkedServices, error: linkedError } = await supabase
         .from("services")
         .select("*, line_segment:line_segments!inner(id, name, project_id)")
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .is("project_id" as any, null)
+        .is("project_id", null)
         .eq("line_segment.project_id", projectId)
         .order("created_at", { ascending: false });
 
