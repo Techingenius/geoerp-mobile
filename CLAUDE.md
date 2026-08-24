@@ -47,6 +47,11 @@ components/
 └── features/     # Feature-specific composed components
 
 types/            # TypeScript types (database models, navigation)
+├── database.generated.ts  # AUTO-GENERATED — do NOT edit manually (synced from geoerp)
+└── database.ts            # Convenience aliases with typed geometry and enums
+
+scripts/
+└── sync-types.sh  # Sync database.generated.ts from geoerp repo
 ```
 
 ## Environment Setup
@@ -111,7 +116,9 @@ module.exports = function (api) {
 
 ### API & Data
 - All Supabase queries go through TanStack Query hooks in `lib/api/`
-- Database types in `types/database.ts` — keep in sync with web admin schema
+- Database types come from the Supabase-generated file (`types/database.generated.ts`) — **never edit this file manually**
+- After any migration in geoerp: run `./scripts/sync-types.sh ../geoerp` (or without arg to sparse-checkout from GitHub)
+- App-specific type aliases with typed geometry and narrowed enums live in `types/database.ts`
 - When adding queries for new tables, verify the table exists in production Supabase first
 - Use `select()` with explicit columns — avoid `select('*')` for performance
 - Handle loading, error, and empty states in every screen that fetches data
