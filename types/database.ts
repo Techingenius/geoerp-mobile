@@ -16,7 +16,7 @@ export type { Database, Json };
 // ---------------------------------------------------------------------------
 // Helper: Extract a table's Row type from the generated Database interface.
 // ---------------------------------------------------------------------------
-type Tables<T extends keyof Database["public"]["Tables"]> =
+export type Tables<T extends keyof Database["public"]["Tables"]> =
   Database["public"]["Tables"][T]["Row"];
 
 // ---------------------------------------------------------------------------

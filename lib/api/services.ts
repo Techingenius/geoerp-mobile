@@ -31,11 +31,11 @@ export function useCreateService() {
       const { data: service, error } = await supabase
         .from("services")
         .insert({
-          line_segment_id: input.line_segment_id!,
+          line_segment_id: (input.line_segment_id ?? null) as string,
           service_type: input.service_type,
           notes: input.notes ?? null,
           status: "to_open" satisfies ServiceStatus,
-          geometry: `POINT(${input.longitude} ${input.latitude})` as unknown,
+          geometry: `POINT(${input.longitude} ${input.latitude})`,
           created_by: user.id,
         })
         .select()
