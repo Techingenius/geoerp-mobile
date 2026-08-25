@@ -81,7 +81,7 @@ export function useProjectServices(projectId: string) {
       // Query 1: services with project_id set directly (migration backfills this)
       const { data: directServices, error: directError } = await supabase
         .from("services")
-        .select("*, line_segment:line_segments(id, name, project_id)")
+        .select("*, line_segment:line_segments!services_line_segment_id_fkey(id, name, project_id)")
         .eq("project_id", projectId)
         .order("created_at", { ascending: false });
 
@@ -97,7 +97,7 @@ export function useProjectServices(projectId: string) {
       if (segmentIds.length > 0) {
         const { data, error: linkedError } = await supabase
           .from("services")
-          .select("*, line_segment:line_segments(id, name, project_id)")
+          .select("*, line_segment:line_segments!services_line_segment_id_fkey(id, name, project_id)")
           .is("project_id", null)
           .in("line_segment_id", segmentIds)
           .order("created_at", { ascending: false });
