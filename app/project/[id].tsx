@@ -20,7 +20,13 @@ import {
   useProjectSegments,
   useProjectServices,
 } from "../../lib/api/projects";
-import { useCreateService } from "../../lib/api/services";
+import {
+  useCreateService,
+  useServicePhotos,
+  useUpdateServiceStatus,
+  useAddServicePhoto,
+  getPhotoUrl,
+} from "../../lib/api/services";
 import { useLocation } from "../../lib/hooks/use-location";
 import type { Service, ServiceStatus } from "../../types/database";
 
@@ -67,12 +73,18 @@ export default function ProjectDetailScreen() {
   const { data: services } = useProjectServices(id);
   const { location } = useLocation();
   const createService = useCreateService();
+  const updateStatus = useUpdateServiceStatus();
+  const addPhoto = useAddServicePhoto();
 
   const [showAddService, setShowAddService] = useState(false);
   const [serviceType, setServiceType] = useState("");
   const [serviceNotes, setServiceNotes] = useState("");
   const [photos, setPhotos] = useState<PhotoItem[]>([]);
-  const [_selectedService, setSelectedService] = useState<Service | null>(null);
+  const [selectedService, setSelectedService] = useState<Service | null>(null);
+  const [pendingStatus, setPendingStatus] = useState<ServiceStatus | null>(null);
+  const [statusPhoto, setStatusPhoto] = useState<PhotoItem | null>(null);
+
+  const { data: servicePhotos } = useServicePhotos(selectedService?.id);
 
   if (loadingProject) {
     return (
@@ -210,6 +222,73 @@ export default function ProjectDetailScreen() {
     } catch (error: unknown) {
       const message = error instanceof Error ? error.message : "No se pudo crear el servicio";
       Alert.alert("Error", message);
+    }
+  };
+
+  const takeStatusPhoto = async (): Promise<PhotoItem | null> => {
+    const { status } = await ImagePicker.requestCameraPermissionsAsync();
+    if (status !== "granted") {
+      Alert.alert("Permiso requerido", "Se necesita acceso a la cámara");
+      return null;
+    }
+    const result = await ImagePicker.launchCameraAsync({
+      mediaTypes: ["images"],
+      quality: 0.7,
+    });
+    if (!result.canceled && result.assets[0]) {
+      const asset = result.assets[0];
+      return {
+        uri: asset.uri,
+        filename: asset.fileName ?? `photo_${Date.now()}.jpg`,
+        mimeType: asset.mimeType ?? "image/jpeg",
+      };
+    }
+    return null;
+  };
+
+  const handleStatusChange = (newStatus: ServiceStatus) => {
+    setPendingStatus(newStatus);
+    setStatusPhoto(null);
+  };
+
+  const handleTakeStatusPhoto = async () => {
+    const photo = await takeStatusPhoto();
+    if (photo) setStatusPhoto(photo);
+  };
+
+  const confirmStatusChange = async () => {
+    if (!selectedService || !pendingStatus || !statusPhoto) return;
+    try {
+      await updateStatus.mutateAsync({
+        serviceId: selectedService.id,
+        status: pendingStatus,
+        photo: statusPhoto,
+      });
+      setSelectedService((prev) =>
+        prev ? { ...prev, status: pendingStatus } : null
+      );
+      setPendingStatus(null);
+      setStatusPhoto(null);
+      Alert.alert("Estado actualizado", `Servicio marcado como ${SERVICE_STATUS_LABELS[pendingStatus] ?? pendingStatus}`);
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Error al actualizar";
+      Alert.alert("Error", msg);
+    }
+  };
+
+  const handleAddExtraPhoto = async () => {
+    if (!selectedService) return;
+    const photo = await takeStatusPhoto();
+    if (!photo) return;
+    try {
+      await addPhoto.mutateAsync({
+        serviceId: selectedService.id,
+        photo,
+      });
+      Alert.alert("Foto agregada", "La foto se subió exitosamente");
+    } catch (error: unknown) {
+      const msg = error instanceof Error ? error.message : "Error al subir foto";
+      Alert.alert("Error", msg);
     }
   };
 
@@ -459,6 +538,249 @@ export default function ProjectDetailScreen() {
                   </Text>
                 )}
               </Pressable>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Service Detail Modal */}
+      <Modal
+        visible={!!selectedService}
+        animationType="slide"
+        transparent
+      >
+        <View className="flex-1 justify-end">
+          <Pressable
+            className="flex-1"
+            onPress={() => {
+              setSelectedService(null);
+              setPendingStatus(null);
+              setStatusPhoto(null);
+            }}
+          />
+          <View className="bg-white rounded-t-2xl px-6 pt-6 pb-10 border-t border-gray-200 max-h-[75%]">
+            <ScrollView showsVerticalScrollIndicator={false}>
+              {selectedService && (
+                <>
+                  {/* Header */}
+                  <View className="flex-row items-center justify-between mb-4">
+                    <View className="flex-row items-center gap-3">
+                      <Text className="text-xl font-bold text-gray-900">
+                        {SERVICE_TYPE_LABELS[selectedService.service_type] ??
+                          selectedService.service_type}
+                      </Text>
+                      <View
+                        style={{
+                          backgroundColor:
+                            SERVICE_STATUS_COLORS[selectedService.status] ??
+                            "#6b7280",
+                        }}
+                        className="px-3 py-1 rounded-full"
+                      >
+                        <Text className="text-white text-xs font-semibold">
+                          {SERVICE_STATUS_LABELS[selectedService.status] ??
+                            selectedService.status}
+                        </Text>
+                      </View>
+                    </View>
+                    <Pressable
+                      onPress={() => {
+                        setSelectedService(null);
+                        setPendingStatus(null);
+                        setStatusPhoto(null);
+                      }}
+                    >
+                      <Ionicons name="close" size={24} color="#6b7280" />
+                    </Pressable>
+                  </View>
+
+                  {/* Notes */}
+                  {selectedService.notes && (
+                    <View className="bg-gray-50 rounded-lg p-3 mb-4">
+                      <Text className="text-sm text-gray-600">
+                        {selectedService.notes}
+                      </Text>
+                    </View>
+                  )}
+
+                  {/* Created date */}
+                  {selectedService.created_at && (
+                    <Text className="text-xs text-gray-400 mb-4">
+                      Creado:{" "}
+                      {new Date(selectedService.created_at).toLocaleDateString(
+                        "es",
+                        {
+                          day: "numeric",
+                          month: "short",
+                          year: "numeric",
+                          hour: "2-digit",
+                          minute: "2-digit",
+                        }
+                      )}
+                    </Text>
+                  )}
+
+                  {/* Status change section */}
+                  {!pendingStatus && (
+                    <>
+                      <Text className="text-sm font-medium text-gray-700 mb-2">
+                        Cambiar estado
+                      </Text>
+                      <View className="flex-row gap-2 mb-4">
+                        {(
+                          Object.keys(SERVICE_STATUS_COLORS) as ServiceStatus[]
+                        )
+                          .filter((s) => s !== selectedService.status)
+                          .map((status) => (
+                            <Pressable
+                              key={status}
+                              onPress={() => handleStatusChange(status)}
+                              style={{
+                                borderColor:
+                                  SERVICE_STATUS_COLORS[status] ?? "#6b7280",
+                              }}
+                              className="flex-1 py-3 rounded-xl border-2 items-center active:opacity-70"
+                            >
+                              <Text
+                                style={{
+                                  color:
+                                    SERVICE_STATUS_COLORS[status] ?? "#6b7280",
+                                }}
+                                className="text-sm font-semibold"
+                              >
+                                {SERVICE_STATUS_LABELS[status] ?? status}
+                              </Text>
+                            </Pressable>
+                          ))}
+                      </View>
+                    </>
+                  )}
+
+                  {/* Pending status change - need photo */}
+                  {pendingStatus && (
+                    <View className="bg-blue-50 rounded-xl p-4 mb-4">
+                      <Text className="text-sm font-medium text-blue-900 mb-3">
+                        Cambiar a:{" "}
+                        {SERVICE_STATUS_LABELS[pendingStatus] ?? pendingStatus}
+                      </Text>
+                      <Text className="text-xs text-blue-700 mb-3">
+                        Se requiere foto para confirmar el cambio de estado
+                      </Text>
+
+                      {!statusPhoto && (
+                        <Pressable
+                          onPress={handleTakeStatusPhoto}
+                          className="bg-blue-600 py-3 rounded-xl items-center flex-row justify-center active:bg-blue-700"
+                        >
+                          <Ionicons name="camera" size={20} color="white" />
+                          <Text className="text-white font-semibold ml-2">
+                            Tomar foto
+                          </Text>
+                        </Pressable>
+                      )}
+
+                      {statusPhoto && (
+                        <>
+                          <Image
+                            source={{ uri: statusPhoto.uri }}
+                            className="w-full h-32 rounded-lg mb-3"
+                            resizeMode="cover"
+                          />
+                          <View className="flex-row gap-2">
+                            <Pressable
+                              onPress={() => {
+                                setPendingStatus(null);
+                                setStatusPhoto(null);
+                              }}
+                              className="flex-1 py-3 rounded-xl border border-gray-300 items-center active:bg-gray-50"
+                            >
+                              <Text className="text-gray-700 font-medium">
+                                Cancelar
+                              </Text>
+                            </Pressable>
+                            <Pressable
+                              onPress={confirmStatusChange}
+                              disabled={updateStatus.isPending}
+                              className="flex-1 py-3 rounded-xl bg-blue-600 items-center active:bg-blue-700"
+                            >
+                              {updateStatus.isPending ? (
+                                <ActivityIndicator color="white" />
+                              ) : (
+                                <Text className="text-white font-semibold">
+                                  Confirmar
+                                </Text>
+                              )}
+                            </Pressable>
+                          </View>
+                        </>
+                      )}
+                    </View>
+                  )}
+
+                  {/* Add extra photo button */}
+                  <Pressable
+                    onPress={handleAddExtraPhoto}
+                    disabled={addPhoto.isPending}
+                    className="flex-row items-center justify-center bg-gray-100 py-3 rounded-xl mb-4 active:bg-gray-200"
+                  >
+                    {addPhoto.isPending ? (
+                      <ActivityIndicator color="#374151" />
+                    ) : (
+                      <>
+                        <Ionicons
+                          name="camera-outline"
+                          size={20}
+                          color="#374151"
+                        />
+                        <Text className="text-gray-700 font-medium ml-2">
+                          Agregar foto
+                        </Text>
+                      </>
+                    )}
+                  </Pressable>
+
+                  {/* Photo history */}
+                  <Text className="text-sm font-medium text-gray-700 mb-2">
+                    Historial de fotos ({servicePhotos?.length ?? 0})
+                  </Text>
+                  {servicePhotos && servicePhotos.length > 0 ? (
+                    <View className="flex-row flex-wrap gap-2 mb-4">
+                      {servicePhotos.map((photo) => (
+                        <View key={photo.id} className="w-20">
+                          <Image
+                            source={{ uri: getPhotoUrl(photo.storage_path) }}
+                            className="w-20 h-20 rounded-lg bg-gray-200"
+                            resizeMode="cover"
+                          />
+                          {photo.service_status && (
+                            <View
+                              style={{
+                                backgroundColor:
+                                  SERVICE_STATUS_COLORS[
+                                    photo.service_status as ServiceStatus
+                                  ] ?? "#6b7280",
+                              }}
+                              className="mt-1 rounded px-1 py-0.5"
+                            >
+                              <Text className="text-white text-[10px] text-center font-medium">
+                                {SERVICE_STATUS_LABELS[
+                                  photo.service_status as ServiceStatus
+                                ] ?? photo.service_status}
+                              </Text>
+                            </View>
+                          )}
+                        </View>
+                      ))}
+                    </View>
+                  ) : (
+                    <View className="bg-gray-50 rounded-lg p-3 mb-4">
+                      <Text className="text-sm text-gray-400 text-center">
+                        Sin fotos registradas
+                      </Text>
+                    </View>
+                  )}
+                </>
+              )}
             </ScrollView>
           </View>
         </View>
