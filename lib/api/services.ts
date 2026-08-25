@@ -37,7 +37,7 @@ export function useCreateService() {
           service_type: input.service_type,
           notes: input.notes ?? null,
           status: "to_open" satisfies ServiceStatus,
-          geometry: `POINT(${input.longitude} ${input.latitude})`,
+          geometry: `SRID=4326;POINT(${input.longitude} ${input.latitude})`,
           created_by: user.id,
         })
         .select()
@@ -71,7 +71,7 @@ export function useCreateService() {
           filename: photo.filename,
           photo_type: "evidence",
           taken_at: new Date().toISOString(),
-          location: `POINT(${input.longitude} ${input.latitude})`,
+          location: `SRID=4326;POINT(${input.longitude} ${input.latitude})`,
           uploaded_by: user.id,
         });
       }

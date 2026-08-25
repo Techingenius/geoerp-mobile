@@ -75,7 +75,7 @@ export function useProjectServices(projectId: string) {
       // Also fetch services linked via line_segments (legacy web-created)
       const { data: linkedServices, error: linkedError } = await supabase
         .from("services")
-        .select("*, line_segment:line_segments!inner(id, name, project_id)")
+        .select("*, line_segment:line_segments!services_line_segment_id_fkey(id, name, project_id)")
         .is("project_id", null)
         .eq("line_segment.project_id", projectId)
         .order("created_at", { ascending: false });
