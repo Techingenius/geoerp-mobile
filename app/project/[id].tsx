@@ -721,27 +721,29 @@ export default function ProjectDetailScreen() {
                     </View>
                   )}
 
-                  {/* Add extra photo button */}
-                  <Pressable
-                    onPress={handleAddExtraPhoto}
-                    disabled={addPhoto.isPending}
-                    className="flex-row items-center justify-center bg-gray-100 py-3 rounded-xl mb-4 active:bg-gray-200"
-                  >
-                    {addPhoto.isPending ? (
-                      <ActivityIndicator color="#374151" />
-                    ) : (
-                      <>
-                        <Ionicons
-                          name="camera-outline"
-                          size={20}
-                          color="#374151"
-                        />
-                        <Text className="text-gray-700 font-medium ml-2">
-                          Agregar foto
-                        </Text>
-                      </>
-                    )}
-                  </Pressable>
+                  {/* Add extra photo button — hidden during status change flow */}
+                  {!pendingStatus && (
+                    <Pressable
+                      onPress={handleAddExtraPhoto}
+                      disabled={addPhoto.isPending}
+                      className="flex-row items-center justify-center bg-gray-100 py-3 rounded-xl mb-4 active:bg-gray-200"
+                    >
+                      {addPhoto.isPending ? (
+                        <ActivityIndicator color="#374151" />
+                      ) : (
+                        <>
+                          <Ionicons
+                            name="camera-outline"
+                            size={20}
+                            color="#374151"
+                          />
+                          <Text className="text-gray-700 font-medium ml-2">
+                            Agregar foto
+                          </Text>
+                        </>
+                      )}
+                    </Pressable>
+                  )}
 
                   {/* Photo history */}
                   <Text className="text-sm font-medium text-gray-700 mb-2">
