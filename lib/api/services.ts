@@ -1,16 +1,7 @@
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import * as FileSystem from "expo-file-system";
+import { File } from "expo-file-system";
 import { supabase } from "../supabase/client";
 import type { ServiceStatus } from "../../types/database";
-
-function base64ToUint8Array(base64: string): Uint8Array {
-  const binaryString = atob(base64);
-  const bytes = new Uint8Array(binaryString.length);
-  for (let i = 0; i < binaryString.length; i++) {
-    bytes[i] = binaryString.charCodeAt(i);
-  }
-  return bytes;
-}
 
 interface CreateServiceInput {
   project_id: string;
@@ -72,12 +63,9 @@ export function useCreateService() {
       for (const photo of input.photos) {
         const storagePath = `${orgId}/${input.project_id}/${service.id}/${Date.now()}_${photo.filename}`;
 
-        // Read file as base64 and convert to Uint8Array for Supabase Storage
-        // (fetch + blob on React Native sends text/plain content type)
-        const base64 = await FileSystem.readAsStringAsync(photo.uri, {
-          encoding: FileSystem.EncodingType.Base64,
-        });
-        const fileData = base64ToUint8Array(base64);
+        // Read file bytes using the new expo-file-system File API
+        const file = new File(photo.uri);
+        const fileData = await file.bytes();
 
         const { error: uploadError } = await supabase.storage
           .from("service-photos")
