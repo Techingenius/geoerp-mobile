@@ -56,14 +56,16 @@ export function useProjectSegments(projectId: string) {
 
 /**
  * Fetch services for a project.
- * Uses project_id directly (mobile-created services) OR via line_segments join (legacy).
- * Two queries merged: services with project_id + services via line_segment.
+ * Two queries merged + dedup:
+ * 1. services WHERE project_id = X  (mobile-created + new web-created)
+ * 2. services WHERE project_id IS NULL AND line_segment_id IN (segment IDs for project)
+ *    (legacy web-created services linked only via line_segments)
  */
 export function useProjectServices(projectId: string) {
   return useQuery({
     queryKey: ["services", projectId],
     queryFn: async (): Promise<Service[]> => {
-      // Fetch services that have project_id set directly (mobile-created)
+      // Query 1: services with project_id set directly
       const { data: directServices, error: directError } = await supabase
         .from("services")
         .select("*, line_segment:line_segments(id, name, project_id)")
@@ -72,18 +74,33 @@ export function useProjectServices(projectId: string) {
 
       if (directError) throw directError;
 
-      // Also fetch services linked via line_segments (legacy web-created)
-      const { data: linkedServices, error: linkedError } = await supabase
-        .from("services")
-        .select("*, line_segment:line_segments!services_line_segment_id_fkey!inner(id, name, project_id)")
-        .is("project_id", null)
-        .eq("line_segment.project_id", projectId)
-        .order("created_at", { ascending: false });
+      // Query 2: legacy services linked via line_segments (no project_id on service)
+      // First get segment IDs for this project, then find services by those IDs.
+      // This avoids PostgREST embedded-resource filtering which can silently fail.
+      const { data: projectSegments, error: segError } = await supabase
+        .from("line_segments")
+        .select("id")
+        .eq("project_id", projectId);
 
-      if (linkedError) throw linkedError;
+      if (segError) throw segError;
+
+      const segmentIds = (projectSegments ?? []).map((s) => s.id);
+
+      let linkedServices: typeof directServices = [];
+      if (segmentIds.length > 0) {
+        const { data, error: linkedError } = await supabase
+          .from("services")
+          .select("*, line_segment:line_segments(id, name, project_id)")
+          .is("project_id", null)
+          .in("line_segment_id", segmentIds)
+          .order("created_at", { ascending: false });
+
+        if (linkedError) throw linkedError;
+        linkedServices = data ?? [];
+      }
 
       // Merge and deduplicate by id
-      const allServices = [...(directServices ?? []), ...(linkedServices ?? [])];
+      const allServices = [...(directServices ?? []), ...linkedServices];
       const seen = new Set<string>();
       const unique = allServices.filter((s) => {
         if (seen.has(s.id)) return false;
