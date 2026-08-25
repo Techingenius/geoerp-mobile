@@ -28,6 +28,19 @@ export function useCreateService() {
 
       if (!user) throw new Error("No hay sesión activa");
 
+      // Get org_id from user profile for storage path consistency with web
+      const { data: profile, error: profileError } = await supabase
+        .from("user_profiles")
+        .select("organization_id")
+        .eq("id", user.id)
+        .single();
+
+      if (profileError || !profile?.organization_id) {
+        throw new Error("No se pudo obtener la organización del usuario");
+      }
+
+      const orgId = profile.organization_id;
+
       // 1. Insert the service
       const { data: service, error } = await supabase
         .from("services")
@@ -47,7 +60,7 @@ export function useCreateService() {
 
       // 2. Upload photos and create service_photos records
       for (const photo of input.photos) {
-        const storagePath = `${service.id}/${Date.now()}_${photo.filename}`;
+        const storagePath = `${orgId}/${input.project_id}/${service.id}/${Date.now()}_${photo.filename}`;
 
         // Fetch the image file as blob
         const response = await fetch(photo.uri);
@@ -60,8 +73,7 @@ export function useCreateService() {
           });
 
         if (uploadError) {
-          console.warn("Photo upload failed:", uploadError.message);
-          continue;
+          throw new Error(`Error subiendo foto: ${uploadError.message}`);
         }
 
         // Insert service_photos record
