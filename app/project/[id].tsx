@@ -70,7 +70,11 @@ export default function ProjectDetailScreen() {
   const { id } = useLocalSearchParams<{ id: string }>();
   const { data: project, isLoading: loadingProject } = useProject(id);
   const { data: segments } = useProjectSegments(id);
-  const { data: services } = useProjectServices(id);
+  const { data: services, error: servicesError } = useProjectServices(id);
+
+  if (servicesError) {
+    console.warn("[ProjectDetail] services query error:", servicesError);
+  }
   const { location } = useLocation();
   const createService = useCreateService();
   const updateStatus = useUpdateServiceStatus();
@@ -344,8 +348,8 @@ export default function ProjectDetailScreen() {
         <View className="flex-row items-center justify-between mb-2">
           <View>
             <Text className="font-semibold text-gray-900">{project.name}</Text>
-            <Text className="text-xs text-gray-400">
-              {services?.length ?? 0} servicios · {segments?.length ?? 0} tramos
+            <Text className={`text-xs ${servicesError ? "text-red-500" : "text-gray-400"}`}>
+              {servicesError ? "Error cargando servicios" : `${services?.length ?? 0} servicios`} · {segments?.length ?? 0} tramos
             </Text>
           </View>
           <Pressable

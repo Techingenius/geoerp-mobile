@@ -56,36 +56,43 @@ export function useProjectSegments(projectId: string) {
 
 /**
  * Fetch services for a project.
- * Two queries merged + dedup:
- * 1. services WHERE project_id = X  (mobile-created + new web-created)
- * 2. services WHERE project_id IS NULL AND line_segment_id IN (segment IDs for project)
- *    (legacy web-created services linked only via line_segments)
+ * Two parallel queries merged + dedup:
+ * 1. services WHERE project_id = X  (backfilled + mobile-created)
+ * 2. services linked via line_segments for this project (catches any not backfilled)
  */
 export function useProjectServices(projectId: string) {
   return useQuery({
     queryKey: ["services", projectId],
     queryFn: async (): Promise<Service[]> => {
-      // Query 1: services with project_id set directly
+      // Get segment IDs for this project (needed for query 2)
+      const { data: projectSegments, error: segError } = await supabase
+        .from("line_segments")
+        .select("id")
+        .eq("project_id", projectId);
+
+      if (segError) {
+        console.warn("[useProjectServices] segments query error:", segError);
+        throw segError;
+      }
+
+      const segmentIds = (projectSegments ?? []).map((s) => s.id);
+      console.warn(`[useProjectServices] projectId=${projectId}, segments=${segmentIds.length}`);
+
+      // Query 1: services with project_id set directly (migration backfills this)
       const { data: directServices, error: directError } = await supabase
         .from("services")
         .select("*, line_segment:line_segments(id, name, project_id)")
         .eq("project_id", projectId)
         .order("created_at", { ascending: false });
 
-      if (directError) throw directError;
+      if (directError) {
+        console.warn("[useProjectServices] direct query error:", directError);
+        throw directError;
+      }
 
-      // Query 2: legacy services linked via line_segments (no project_id on service)
-      // First get segment IDs for this project, then find services by those IDs.
-      // This avoids PostgREST embedded-resource filtering which can silently fail.
-      const { data: projectSegments, error: segError } = await supabase
-        .from("line_segments")
-        .select("id")
-        .eq("project_id", projectId);
+      console.warn(`[useProjectServices] direct services=${directServices?.length ?? 0}`);
 
-      if (segError) throw segError;
-
-      const segmentIds = (projectSegments ?? []).map((s) => s.id);
-
+      // Query 2: services linked via line_segments (no project_id on service row)
       let linkedServices: typeof directServices = [];
       if (segmentIds.length > 0) {
         const { data, error: linkedError } = await supabase
@@ -95,9 +102,14 @@ export function useProjectServices(projectId: string) {
           .in("line_segment_id", segmentIds)
           .order("created_at", { ascending: false });
 
-        if (linkedError) throw linkedError;
+        if (linkedError) {
+          console.warn("[useProjectServices] linked query error:", linkedError);
+          throw linkedError;
+        }
         linkedServices = data ?? [];
       }
+
+      console.warn(`[useProjectServices] linked services=${linkedServices.length}`);
 
       // Merge and deduplicate by id
       const allServices = [...(directServices ?? []), ...linkedServices];
@@ -108,6 +120,7 @@ export function useProjectServices(projectId: string) {
         return true;
       });
 
+      console.warn(`[useProjectServices] total unique=${unique.length}`);
       return unique as Service[];
     },
     enabled: !!projectId,
