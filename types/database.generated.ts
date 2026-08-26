@@ -7,6 +7,11 @@ export type Json =
   | Json[]
 
 export type Database = {
+  // Allows to automatically instantiate createClient with right options
+  // instead of createClient<Database, { PostgrestVersion: 'XX' }>(URL, KEY)
+  __InternalSupabase: {
+    PostgrestVersion: "14.1"
+  }
   graphql_public: {
     Tables: {
       [_ in never]: never
@@ -621,6 +626,57 @@ export type Database = {
           },
         ]
       }
+      damage_photos: {
+        Row: {
+          caption: string | null
+          created_at: string | null
+          damage_id: string
+          filename: string
+          id: string
+          location: unknown
+          storage_path: string
+          taken_at: string | null
+          uploaded_by: string | null
+        }
+        Insert: {
+          caption?: string | null
+          created_at?: string | null
+          damage_id: string
+          filename: string
+          id?: string
+          location?: unknown
+          storage_path: string
+          taken_at?: string | null
+          uploaded_by?: string | null
+        }
+        Update: {
+          caption?: string | null
+          created_at?: string | null
+          damage_id?: string
+          filename?: string
+          id?: string
+          location?: unknown
+          storage_path?: string
+          taken_at?: string | null
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "damage_photos_damage_id_fkey"
+            columns: ["damage_id"]
+            isOneToOne: false
+            referencedRelation: "pre_existing_damages"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "damage_photos_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       drill_authorizations: {
         Row: {
           approved_by: string | null
@@ -968,6 +1024,7 @@ export type Database = {
       }
       line_segments: {
         Row: {
+          auto_generated: boolean
           created_at: string | null
           created_by: string | null
           description: string | null
@@ -976,10 +1033,13 @@ export type Database = {
           name: string
           project_id: string | null
           properties: Json | null
+          source_service_a_id: string | null
+          source_service_b_id: string | null
           ticket_number: string | null
           updated_at: string | null
         }
         Insert: {
+          auto_generated?: boolean
           created_at?: string | null
           created_by?: string | null
           description?: string | null
@@ -988,10 +1048,13 @@ export type Database = {
           name: string
           project_id?: string | null
           properties?: Json | null
+          source_service_a_id?: string | null
+          source_service_b_id?: string | null
           ticket_number?: string | null
           updated_at?: string | null
         }
         Update: {
+          auto_generated?: boolean
           created_at?: string | null
           created_by?: string | null
           description?: string | null
@@ -1000,6 +1063,8 @@ export type Database = {
           name?: string
           project_id?: string | null
           properties?: Json | null
+          source_service_a_id?: string | null
+          source_service_b_id?: string | null
           ticket_number?: string | null
           updated_at?: string | null
         }
@@ -1016,6 +1081,20 @@ export type Database = {
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "line_segments_source_service_a_id_fkey"
+            columns: ["source_service_a_id"]
+            isOneToOne: false
+            referencedRelation: "services"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "line_segments_source_service_b_id_fkey"
+            columns: ["source_service_b_id"]
+            isOneToOne: false
+            referencedRelation: "services"
             referencedColumns: ["id"]
           },
         ]
@@ -1624,6 +1703,73 @@ export type Database = {
           },
         ]
       }
+      pre_existing_damages: {
+        Row: {
+          created_at: string | null
+          damage_type: string
+          description: string | null
+          geometry: unknown
+          id: string
+          project_id: string
+          reported_at: string | null
+          reported_by: string | null
+          segment_id: string | null
+          severity: string
+          status: string
+          updated_at: string | null
+        }
+        Insert: {
+          created_at?: string | null
+          damage_type: string
+          description?: string | null
+          geometry: unknown
+          id?: string
+          project_id: string
+          reported_at?: string | null
+          reported_by?: string | null
+          segment_id?: string | null
+          severity?: string
+          status?: string
+          updated_at?: string | null
+        }
+        Update: {
+          created_at?: string | null
+          damage_type?: string
+          description?: string | null
+          geometry?: unknown
+          id?: string
+          project_id?: string
+          reported_at?: string | null
+          reported_by?: string | null
+          segment_id?: string | null
+          severity?: string
+          status?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "pre_existing_damages_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pre_existing_damages_reported_by_fkey"
+            columns: ["reported_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "pre_existing_damages_segment_id_fkey"
+            columns: ["segment_id"]
+            isOneToOne: false
+            referencedRelation: "line_segments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       production_entries: {
         Row: {
           admin_approved_at: string | null
@@ -2143,124 +2289,6 @@ export type Database = {
           },
         ]
       }
-      pre_existing_damages: {
-        Row: {
-          created_at: string | null
-          damage_type: string
-          description: string | null
-          geometry: unknown
-          id: string
-          project_id: string
-          reported_at: string | null
-          reported_by: string | null
-          segment_id: string | null
-          severity: string
-          status: string
-          updated_at: string | null
-        }
-        Insert: {
-          created_at?: string | null
-          damage_type: string
-          description?: string | null
-          geometry: unknown
-          id?: string
-          project_id: string
-          reported_at?: string | null
-          reported_by?: string | null
-          segment_id?: string | null
-          severity?: string
-          status?: string
-          updated_at?: string | null
-        }
-        Update: {
-          created_at?: string | null
-          damage_type?: string
-          description?: string | null
-          geometry?: unknown
-          id?: string
-          project_id?: string
-          reported_at?: string | null
-          reported_by?: string | null
-          segment_id?: string | null
-          severity?: string
-          status?: string
-          updated_at?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "pre_existing_damages_project_id_fkey"
-            columns: ["project_id"]
-            isOneToOne: false
-            referencedRelation: "projects"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "pre_existing_damages_segment_id_fkey"
-            columns: ["segment_id"]
-            isOneToOne: false
-            referencedRelation: "line_segments"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "pre_existing_damages_reported_by_fkey"
-            columns: ["reported_by"]
-            isOneToOne: false
-            referencedRelation: "user_profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
-      damage_photos: {
-        Row: {
-          caption: string | null
-          created_at: string | null
-          damage_id: string
-          filename: string
-          id: string
-          location: unknown
-          storage_path: string
-          taken_at: string | null
-          uploaded_by: string | null
-        }
-        Insert: {
-          caption?: string | null
-          created_at?: string | null
-          damage_id: string
-          filename: string
-          id?: string
-          location?: unknown
-          storage_path: string
-          taken_at?: string | null
-          uploaded_by?: string | null
-        }
-        Update: {
-          caption?: string | null
-          created_at?: string | null
-          damage_id?: string
-          filename?: string
-          id?: string
-          location?: unknown
-          storage_path?: string
-          taken_at?: string | null
-          uploaded_by?: string | null
-        }
-        Relationships: [
-          {
-            foreignKeyName: "damage_photos_damage_id_fkey"
-            columns: ["damage_id"]
-            isOneToOne: false
-            referencedRelation: "pre_existing_damages"
-            referencedColumns: ["id"]
-          },
-          {
-            foreignKeyName: "damage_photos_uploaded_by_fkey"
-            columns: ["uploaded_by"]
-            isOneToOne: false
-            referencedRelation: "user_profiles"
-            referencedColumns: ["id"]
-          },
-        ]
-      }
       service_photos: {
         Row: {
           caption: string | null
@@ -2270,6 +2298,7 @@ export type Database = {
           location: unknown
           photo_type: string | null
           service_id: string
+          service_status: string | null
           storage_path: string
           taken_at: string | null
           uploaded_by: string | null
@@ -2282,6 +2311,7 @@ export type Database = {
           location?: unknown
           photo_type?: string | null
           service_id: string
+          service_status?: string | null
           storage_path: string
           taken_at?: string | null
           uploaded_by?: string | null
@@ -2294,6 +2324,7 @@ export type Database = {
           location?: unknown
           photo_type?: string | null
           service_id?: string
+          service_status?: string | null
           storage_path?: string
           taken_at?: string | null
           uploaded_by?: string | null
@@ -2323,10 +2354,11 @@ export type Database = {
           drill_depth_feet: number | null
           geometry: unknown
           id: string
-          line_segment_id: string
+          line_segment_id: string | null
           marked_by: string | null
           notes: string | null
           opened_by: string | null
+          project_id: string | null
           service_line: unknown
           service_type: string
           status: string
@@ -2339,10 +2371,11 @@ export type Database = {
           drill_depth_feet?: number | null
           geometry: unknown
           id?: string
-          line_segment_id: string
+          line_segment_id?: string | null
           marked_by?: string | null
           notes?: string | null
           opened_by?: string | null
+          project_id?: string | null
           service_line?: unknown
           service_type: string
           status?: string
@@ -2355,10 +2388,11 @@ export type Database = {
           drill_depth_feet?: number | null
           geometry?: unknown
           id?: string
-          line_segment_id?: string
+          line_segment_id?: string | null
           marked_by?: string | null
           notes?: string | null
           opened_by?: string | null
+          project_id?: string | null
           service_line?: unknown
           service_type?: string
           status?: string
@@ -2391,6 +2425,13 @@ export type Database = {
             columns: ["opened_by"]
             isOneToOne: false
             referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "services_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
             referencedColumns: ["id"]
           },
         ]
@@ -3394,4 +3435,3 @@ export const Constants = {
     Enums: {},
   },
 } as const
-

@@ -55,24 +55,73 @@ export function useProjectSegments(projectId: string) {
 }
 
 /**
- * Fetch services for a project by joining through line_segments.
- * Services don't have a direct project_id FK — they reference line_segment_id,
- * and line_segments reference project_id.
+ * Fetch services for a project.
+ * Two parallel queries merged + dedup:
+ * 1. services WHERE project_id = X  (backfilled + mobile-created)
+ * 2. services linked via line_segments for this project (catches any not backfilled)
  */
 export function useProjectServices(projectId: string) {
   return useQuery({
     queryKey: ["services", projectId],
     queryFn: async (): Promise<Service[]> => {
-      const { data, error } = await supabase
+      // Get segment IDs for this project (needed for query 2)
+      const { data: projectSegments, error: segError } = await supabase
+        .from("line_segments")
+        .select("id")
+        .eq("project_id", projectId);
+
+      if (segError) {
+        console.warn("[useProjectServices] segments query error:", segError);
+        throw segError;
+      }
+
+      const segmentIds = (projectSegments ?? []).map((s) => s.id);
+      console.warn(`[useProjectServices] projectId=${projectId}, segments=${segmentIds.length}`);
+
+      // Query 1: services with project_id set directly (migration backfills this)
+      const { data: directServices, error: directError } = await supabase
         .from("services")
-        .select(
-          "*, line_segment:line_segments!inner(id, name, project_id)"
-        )
-        .eq("line_segment.project_id", projectId)
+        .select("*, line_segment:line_segments!services_line_segment_id_fkey(id, name, project_id)")
+        .eq("project_id", projectId)
         .order("created_at", { ascending: false });
 
-      if (error) throw error;
-      return (data as Service[]) ?? [];
+      if (directError) {
+        console.warn("[useProjectServices] direct query error:", directError);
+        throw directError;
+      }
+
+      console.warn(`[useProjectServices] direct services=${directServices?.length ?? 0}`);
+
+      // Query 2: services linked via line_segments (no project_id on service row)
+      let linkedServices: typeof directServices = [];
+      if (segmentIds.length > 0) {
+        const { data, error: linkedError } = await supabase
+          .from("services")
+          .select("*, line_segment:line_segments!services_line_segment_id_fkey(id, name, project_id)")
+          .is("project_id", null)
+          .in("line_segment_id", segmentIds)
+          .order("created_at", { ascending: false });
+
+        if (linkedError) {
+          console.warn("[useProjectServices] linked query error:", linkedError);
+          throw linkedError;
+        }
+        linkedServices = data ?? [];
+      }
+
+      console.warn(`[useProjectServices] linked services=${linkedServices.length}`);
+
+      // Merge and deduplicate by id
+      const allServices = [...(directServices ?? []), ...linkedServices];
+      const seen = new Set<string>();
+      const unique = allServices.filter((s) => {
+        if (seen.has(s.id)) return false;
+        seen.add(s.id);
+        return true;
+      });
+
+      console.warn(`[useProjectServices] total unique=${unique.length}`);
+      return unique as Service[];
     },
     enabled: !!projectId,
   });
