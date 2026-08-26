@@ -14,6 +14,7 @@ export interface ServicePhoto {
   taken_at: string | null;
   uploaded_by: string | null;
   created_at: string | null;
+  uploaded_by_profile?: { full_name: string | null } | null;
 }
 
 interface CreateServiceInput {
@@ -116,12 +117,12 @@ export function useServicePhotos(serviceId: string | undefined) {
     queryFn: async (): Promise<ServicePhoto[]> => {
       const { data, error } = await supabase
         .from("service_photos")
-        .select("id, service_id, storage_path, filename, photo_type, service_status, caption, taken_at, uploaded_by, created_at")
+        .select("id, service_id, storage_path, filename, photo_type, service_status, caption, taken_at, uploaded_by, created_at, uploaded_by_profile:user_profiles!service_photos_uploaded_by_fkey(full_name)")
         .eq("service_id", serviceId!)
         .order("created_at", { ascending: false });
 
       if (error) throw error;
-      return data ?? [];
+      return (data as unknown as ServicePhoto[]) ?? [];
     },
     enabled: !!serviceId,
   });
@@ -135,7 +136,8 @@ export function getPhotoUrl(storagePath: string): string {
 interface UpdateServiceStatusInput {
   serviceId: string;
   status: ServiceStatus;
-  photo: PhotoInput;
+  photos: PhotoInput[];
+  notes?: string;
 }
 
 export function useUpdateServiceStatus() {
@@ -148,7 +150,6 @@ export function useUpdateServiceStatus() {
       } = await supabase.auth.getUser();
       if (!user) throw new Error("No hay sesión activa");
 
-      // Get org_id for storage path
       const { data: profile } = await supabase
         .from("user_profiles")
         .select("organization_id")
@@ -159,7 +160,6 @@ export function useUpdateServiceStatus() {
         throw new Error("No se pudo obtener la organización del usuario");
       }
 
-      // Get service to find project_id
       const { data: service, error: serviceError } = await supabase
         .from("services")
         .select("project_id")
@@ -168,41 +168,49 @@ export function useUpdateServiceStatus() {
 
       if (serviceError || !service) throw new Error("Servicio no encontrado");
 
-      // Update service status
+      // Update service status + notes
       const { data: updated, error } = await supabase
         .from("services")
-        .update({ status: input.status })
+        .update({
+          status: input.status,
+          opened_by: user.id,
+          notes: input.notes ?? null,
+        })
         .eq("id", input.serviceId)
         .select()
         .single();
 
       if (error) throw error;
 
-      // Upload transition photo
-      const storagePath = `${profile.organization_id}/${service.project_id}/${input.serviceId}/${Date.now()}_${input.photo.filename}`;
+      // Upload all transition photos
+      const photoType = input.status === "not_found" ? "not_found_proof" : "status_change";
+      for (const photo of input.photos) {
+        const storagePath = `${profile.organization_id}/${service.project_id}/${input.serviceId}/${Date.now()}_${photo.filename}`;
 
-      const file = new File(input.photo.uri);
-      const fileData = await file.bytes();
+        const file = new File(photo.uri);
+        const fileData = await file.bytes();
 
-      const { error: uploadError } = await supabase.storage
-        .from("service-photos")
-        .upload(storagePath, fileData, {
-          contentType: input.photo.mimeType,
+        const { error: uploadError } = await supabase.storage
+          .from("service-photos")
+          .upload(storagePath, fileData, {
+            contentType: photo.mimeType,
+          });
+
+        if (uploadError) {
+          throw new Error(`Error subiendo foto: ${uploadError.message}`);
+        }
+
+        await supabase.from("service_photos").insert({
+          service_id: input.serviceId,
+          storage_path: storagePath,
+          filename: photo.filename,
+          photo_type: photoType,
+          service_status: input.status,
+          caption: input.notes ?? null,
+          taken_at: new Date().toISOString(),
+          uploaded_by: user.id,
         });
-
-      if (uploadError) {
-        throw new Error(`Error subiendo foto: ${uploadError.message}`);
       }
-
-      await supabase.from("service_photos").insert({
-        service_id: input.serviceId,
-        storage_path: storagePath,
-        filename: input.photo.filename,
-        photo_type: "status_change",
-        service_status: input.status,
-        taken_at: new Date().toISOString(),
-        uploaded_by: user.id,
-      });
 
       return updated;
     },
@@ -213,17 +221,17 @@ export function useUpdateServiceStatus() {
   });
 }
 
-interface AddServicePhotoInput {
+interface AddServicePhotosInput {
   serviceId: string;
-  photo: PhotoInput;
+  photos: PhotoInput[];
   caption?: string;
 }
 
-export function useAddServicePhoto() {
+export function useAddServicePhotos() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (input: AddServicePhotoInput) => {
+    mutationFn: async (input: AddServicePhotosInput) => {
       const {
         data: { user },
       } = await supabase.auth.getUser();
@@ -247,33 +255,35 @@ export function useAddServicePhoto() {
 
       if (!service) throw new Error("Servicio no encontrado");
 
-      const storagePath = `${profile.organization_id}/${service.project_id}/${input.serviceId}/${Date.now()}_${input.photo.filename}`;
+      for (const photo of input.photos) {
+        const storagePath = `${profile.organization_id}/${service.project_id}/${input.serviceId}/${Date.now()}_${photo.filename}`;
 
-      const file = new File(input.photo.uri);
-      const fileData = await file.bytes();
+        const file = new File(photo.uri);
+        const fileData = await file.bytes();
 
-      const { error: uploadError } = await supabase.storage
-        .from("service-photos")
-        .upload(storagePath, fileData, {
-          contentType: input.photo.mimeType,
+        const { error: uploadError } = await supabase.storage
+          .from("service-photos")
+          .upload(storagePath, fileData, {
+            contentType: photo.mimeType,
+          });
+
+        if (uploadError) {
+          throw new Error(`Error subiendo foto: ${uploadError.message}`);
+        }
+
+        const { error } = await supabase.from("service_photos").insert({
+          service_id: input.serviceId,
+          storage_path: storagePath,
+          filename: photo.filename,
+          photo_type: "evidence",
+          service_status: service.status,
+          caption: input.caption ?? null,
+          taken_at: new Date().toISOString(),
+          uploaded_by: user.id,
         });
 
-      if (uploadError) {
-        throw new Error(`Error subiendo foto: ${uploadError.message}`);
+        if (error) throw error;
       }
-
-      const { error } = await supabase.from("service_photos").insert({
-        service_id: input.serviceId,
-        storage_path: storagePath,
-        filename: input.photo.filename,
-        photo_type: "evidence",
-        service_status: service.status,
-        caption: input.caption ?? null,
-        taken_at: new Date().toISOString(),
-        uploaded_by: user.id,
-      });
-
-      if (error) throw error;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["service-photos"] });
