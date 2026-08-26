@@ -37,13 +37,24 @@ jobs:
       - name: Build Android APK
         id: build
         run: |
-          BUILD_OUTPUT=$(eas build --platform android --profile preview --non-interactive --json 2>&1) || true
-          BUILD_URL=$(echo "$BUILD_OUTPUT" | jq -r '.[0].artifacts.buildUrl // empty')
-          BUILD_PAGE=$(echo "$BUILD_OUTPUT" | jq -r '.[0].buildDetailsPageUrl // empty')
+          EAS_STDERR=$(mktemp)
+          BUILD_OUTPUT=$(eas build --platform android --profile preview --non-interactive --json 2>"$EAS_STDERR") || true
+          EAS_LOGS=$(cat "$EAS_STDERR")
+          rm -f "$EAS_STDERR"
+
+          # Show EAS stderr logs for debugging
+          if [ -n "$EAS_LOGS" ]; then
+            echo "--- EAS Logs ---"
+            echo "$EAS_LOGS"
+            echo "--- End Logs ---"
+          fi
+
+          BUILD_URL=$(echo "$BUILD_OUTPUT" | jq -r '.[0].artifacts.buildUrl // empty' 2>/dev/null)
+          BUILD_PAGE=$(echo "$BUILD_OUTPUT" | jq -r '.[0].buildDetailsPageUrl // empty' 2>/dev/null)
 
           if [ -z "$BUILD_URL" ]; then
             echo "::error::EAS Build failed or returned no artifact URL"
-            echo "--- EAS Build Output ---"
+            echo "--- EAS Build JSON Output ---"
             echo "$BUILD_OUTPUT"
             echo "--- End Output ---"
             exit 1
