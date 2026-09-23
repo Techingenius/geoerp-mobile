@@ -126,6 +126,54 @@ if [ -z "$BASE_BRANCH" ]; then
   BASE_BRANCH="$(gh pr view "$PR_NUMBER" --repo "$REPO" --json baseRefName --jq .baseRefName 2>/dev/null || true)"
 fi
 
+# --- Wake gate ---------------------------------------------------------------
+# GRA-669: everything above is cheap shell; everything below wakes a Claude
+# agent. Of the last 20 runs before this gate existed, 16 concluded with no
+# action taken - the agent booted, loaded its whole context, and reported that
+# CI was green on a PR nobody had approved yet. That decision is available here,
+# for free, from data this script already holds.
+#
+# Notify only when an agent has something to decide:
+#   - the run failed            -> it needs diagnosis and a fix cycle
+#   - the checks never settled  -> unknown state, never leave it without a trigger
+#   - green + approved + mergeable + not draft -> this is the merge gate, its job
+#
+# FAIL OPEN. If `gh` errors or returns something unexpected, notify. A stray run
+# costs tokens; a silently swallowed notification means a PR is never merged and
+# nobody finds out. This gate may only suppress a case it positively recognised.
+if [ "${SKIP_WAKE_GATE:-}" = "true" ]; then
+  echo "::notice::SKIP_WAKE_GATE=true - wake gate bypassed."
+elif [ "$conclusion" != "success" ] || [ "$settled" != "true" ]; then
+  : # actionable: a failure, or a state we could not confirm
+else
+  pr_state="$(gh pr view "$PR_NUMBER" --repo "$REPO" \
+    --json reviewDecision,mergeable,isDraft,state 2>/dev/null || true)"
+  if [ -z "$pr_state" ]; then
+    echo "::warning::Could not read PR state for #${PR_NUMBER}; notifying anyway (gate fails open)."
+  else
+    review="$(printf '%s' "$pr_state" | jq -r '.reviewDecision // ""' 2>/dev/null || echo "")"
+    mergeable="$(printf '%s' "$pr_state" | jq -r '.mergeable // ""' 2>/dev/null || echo "")"
+    is_draft="$(printf '%s' "$pr_state" | jq -r '.isDraft // ""' 2>/dev/null || echo "")"
+    pr_open="$(printf '%s' "$pr_state" | jq -r '.state // ""' 2>/dev/null || echo "")"
+
+    skip_reason=""
+    if [ "$pr_open" = "CLOSED" ] || [ "$pr_open" = "MERGED" ]; then
+      skip_reason="the PR is ${pr_open}"
+    elif [ "$is_draft" = "true" ]; then
+      skip_reason="the PR is a draft"
+    elif [ "$review" != "APPROVED" ]; then
+      skip_reason="CI is green but the PR is not approved (reviewDecision=${review:-none})"
+    elif [ "$mergeable" != "MERGEABLE" ]; then
+      skip_reason="CI is green and approved but the PR is not mergeable (mergeable=${mergeable:-unknown})"
+    fi
+
+    if [ -n "$skip_reason" ]; then
+      echo "::notice::No autopilot run for ${REPO}#${PR_NUMBER} @ ${HEAD_SHA:0:7} - ${skip_reason}, so there is no decision for an agent to make (GRA-669). Set SKIP_WAKE_GATE=true to override."
+      exit 0
+    fi
+  fi
+fi
+
 payload="$(jq -n \
   --arg event "ci_complete" \
   --arg repo "$REPO" \
