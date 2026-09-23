@@ -49,3 +49,43 @@ jobs:
       - name: Run ESLint
         run: npx eslint . --ext .ts,.tsx
 
+
+  # GRA-661: the single trigger for the CI autopilot.
+  #
+  # This repo used to notify the autopilot through a repository `check_suite`
+  # webhook. GitHub opens one check suite per workflow run and one per external
+  # app, so a single push delivered several `check_suite.completed` events and
+  # each one booted a full agent run that loaded the entire project brief before
+  # concluding it had nothing to do. This job replaces all of them: it runs once
+  # per push, waits for every other check on the commit to settle, and posts one
+  # payload carrying the aggregate the agent used to rebuild with `gh pr checks`.
+  #
+  # `!cancelled()` rather than `always()`: a push that supersedes this one
+  # cancels the run, and a cancelled run has nothing to report - the superseding
+  # push will notify for its own SHA.
+  notify-autopilot:
+    name: Notify CI Autopilot
+    needs: [typecheck, lint]
+    if: ${{ !cancelled() && github.event_name == 'pull_request' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      checks: read
+      statuses: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Post aggregate CI result
+        env:
+          # Absent on fork PRs by design; the script treats that as a no-op.
+          AUTOPILOT_WEBHOOK_URL: ${{ secrets.AUTOPILOT_WEBHOOK_URL }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          HEAD_BRANCH: ${{ github.event.pull_request.head.ref }}
+          BASE_BRANCH: ${{ github.event.pull_request.base.ref }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          SELF_CHECK_NAME: Notify CI Autopilot
+        run: .github/scripts/notify-ci-autopilot.sh
