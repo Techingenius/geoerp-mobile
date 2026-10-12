@@ -127,6 +127,7 @@ export default function ProductionEntryScreen() {
   const createEntry = useCreateProductionEntry();
 
   const [memberIds, setMemberIds] = useState<string[]>([]);
+  const scrollRef = useRef<ScrollView>(null);
 
   const {
     control,
@@ -223,6 +224,14 @@ export default function ProductionEntryScreen() {
     );
   };
 
+  // The submit button sits below the fold and every field error renders above
+  // it, so a failed validation looked like nothing happened at all. Scroll
+  // back to the form so the reporter sees what it is asking for.
+  const onInvalid = () => {
+    Keyboard.dismiss();
+    scrollRef.current?.scrollTo({ y: 0, animated: true });
+  };
+
   const onSubmit = async (values: ProductionFormValues) => {
     Keyboard.dismiss();
 
@@ -299,7 +308,8 @@ export default function ProductionEntryScreen() {
       className="flex-1 bg-gray-50"
     >
       <ScrollView
-        contentContainerClassName="px-5 py-5 gap-5"
+        ref={scrollRef}
+        contentContainerClassName="px-5 pt-5 pb-10 gap-5"
         keyboardShouldPersistTaps="handled"
         showsVerticalScrollIndicator={false}
       >
@@ -320,10 +330,10 @@ export default function ProductionEntryScreen() {
                 </Text>
               </View>
               <Text className="text-sm text-gray-600">
-                La base de datos solo permite crear reportes de producción a los
-                roles <Text className="font-semibold">admin</Text> y{" "}
-                <Text className="font-semibold">supervisor</Text>. Pídele al
-                líder de tu cuadrilla que registre la producción del turno.
+                Solo <Text className="font-semibold">admin</Text> y{" "}
+                <Text className="font-semibold">supervisor</Text> pueden
+                registrar producción. Pídele al líder de tu cuadrilla que
+                registre la producción del turno.
               </Text>
             </CardContent>
           </Card>
@@ -492,7 +502,7 @@ export default function ProductionEntryScreen() {
               <Button
                 title="Registrar producción"
                 size="lg"
-                onPress={handleSubmit(onSubmit)}
+                onPress={handleSubmit(onSubmit, onInvalid)}
                 loading={isSubmitting || createEntry.isPending}
                 disabled={isSubmitting || createEntry.isPending}
                 icon={<Ionicons name="checkmark-circle" size={20} color="white" />}
