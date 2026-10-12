@@ -1,0 +1,164 @@
+name: Android Preview Build
+
+# Opt-in, not automatic. Add the `preview-build` label to a PR when you actually
+# want an installable APK for it; pushes to a labelled PR rebuild. A full Android
+# build costs ~15 min of EAS compute, so it is not worth spending on PRs that
+# change CI, docs or dependencies — which is most of them.
+on:
+  pull_request:
+    branches: [main]
+    types: [labeled, synchronize]
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: "PR number to comment the build link on (optional)"
+        required: false
+        type: string
+
+# Deliberately NOT cancel-in-progress. The original workflow set it to save
+# resources, but it never could: the build runs on EAS, not on the runner, so
+# cancelling the runner never reached the build — it just orphaned it, still
+# running and still billing. With --no-wait the job is ~2 min, so there is no
+# long-held runner worth cancelling, and letting it finish guarantees the build
+# link actually gets posted.
+concurrency:
+  group: preview-build-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    name: Build Android APK
+    # Fork PRs never receive secrets, so EXPO_TOKEN would be empty and the build
+    # could only fail — skip rather than show a confusing red X on a contribution.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.head.repo.full_name == github.repository &&
+       ((github.event.action == 'labeled' && github.event.label.name == 'preview-build') ||
+        (github.event.action == 'synchronize' &&
+         contains(github.event.pull_request.labels.*.name, 'preview-build'))))
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
+    steps:
+      - name: Verify EXPO_TOKEN is configured
+        env:
+          EXPO_TOKEN: ${{ secrets.EXPO_TOKEN }}
+        run: |
+          if [ -z "$EXPO_TOKEN" ]; then
+            echo "::error::Repository secret EXPO_TOKEN is not set. Generate one at" \
+                 "https://expo.dev/accounts/jonasgraterol/settings/access-tokens and add it under" \
+                 "Settings -> Secrets and variables -> Actions. Without it EAS cannot authenticate."
+            exit 1
+          fi
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Setup EAS
+        uses: expo/expo-github-action@v8
+        with:
+          # Pinned to the major eas.json declares, so a breaking EAS CLI release
+          # cannot change this workflow's behaviour without a deliberate bump.
+          eas-version: ^21.0.0
+          token: ${{ secrets.EXPO_TOKEN }}
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Queue Android build on EAS
+        id: build
+        run: |
+          set -o pipefail
+
+          # --no-wait returns as soon as the build is queued, instead of holding a
+          # runner idle for the whole ~15 min remote build.
+          # --json puts the build object on stdout; EAS diagnostics go to stderr.
+          # Keeping them in separate files is what stops jq from being handed a
+          # log line instead of JSON.
+          if ! eas build \
+                --platform android \
+                --profile preview \
+                --non-interactive \
+                --no-wait \
+                --json >"$RUNNER_TEMP/build.json" 2>"$RUNNER_TEMP/eas.log"; then
+            echo "::error::eas build failed to queue a build. EAS output follows."
+            cat "$RUNNER_TEMP/eas.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/eas.log"
+
+          BUILD_OUTPUT=$(cat "$RUNNER_TEMP/build.json")
+
+          BUILD_ID=$(printf '%s' "$BUILD_OUTPUT" | jq -r '.[0].id // empty')
+          BUILD_PAGE=$(printf '%s' "$BUILD_OUTPUT" | jq -r '.[0].buildDetailsPageUrl // empty')
+
+          if [ -z "$BUILD_ID" ]; then
+            echo "::error::EAS returned no build id; cannot report a build link."
+            exit 1
+          fi
+
+          if [ -z "$BUILD_PAGE" ]; then
+            OWNER=$(jq -r '.expo.owner' app.json)
+            SLUG=$(jq -r '.expo.slug' app.json)
+            BUILD_PAGE="https://expo.dev/accounts/${OWNER}/projects/${SLUG}/builds/${BUILD_ID}"
+          fi
+
+          echo "build_page=$BUILD_PAGE" >> "$GITHUB_OUTPUT"
+          echo "Queued EAS build $BUILD_ID -> $BUILD_PAGE"
+
+      - name: Comment build link on PR
+        if: github.event.pull_request.number || github.event.inputs.pr
+        uses: actions/github-script@v7
+        env:
+          BUILD_PAGE: ${{ steps.build.outputs.build_page }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr }}
+        with:
+          script: |
+            const issue_number = Number(process.env.PR_NUMBER);
+            const marker = '<!-- android-preview-build -->';
+            const body = [
+              marker,
+              '## 📱 Android Preview Build',
+              '',
+              `**[Build in progress — download the APK here](${process.env.BUILD_PAGE})**`,
+              '',
+              'The APK appears on that page once EAS finishes (~15 min). Signing in to the',
+              'Expo organisation is required to download it, which is deliberate: the APK',
+              'embeds the Google Maps API key, so its direct artifact URL is never posted',
+              'on this public repository.',
+              '',
+              `Queued from commit \`${context.sha.substring(0, 7)}\``,
+            ].join('\n');
+
+            // Replace our own previous comment rather than deleting anything that
+            // merely quotes the heading. Scoped to this workflow's own marker.
+            const existing = await github.paginate(github.rest.issues.listComments, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number,
+            });
+            const mine = existing.find(
+              (c) => c.user.type === 'Bot' && c.body?.includes(marker),
+            );
+
+            if (mine) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: mine.id,
+                body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number,
+                body,
+              });
+            }
