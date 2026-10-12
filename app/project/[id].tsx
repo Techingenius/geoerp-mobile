@@ -11,7 +11,7 @@ import {
   Image,
   StyleSheet,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, router } from "expo-router";
 import MapView, { Marker, Polyline } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
@@ -442,13 +442,24 @@ export default function ProjectDetailScreen() {
               {servicesError ? "Error cargando servicios" : `${services?.length ?? 0} servicios`} · {segments?.length ?? 0} tramos
             </Text>
           </View>
-          <Pressable
-            onPress={() => setShowAddService(true)}
-            className="bg-primary-600 flex-row items-center px-4 py-2.5 rounded-xl active:bg-primary-700"
-          >
-            <Ionicons name="add" size={18} color="white" />
-            <Text className="text-white font-medium ml-1">Servicio</Text>
-          </Pressable>
+          <View className="flex-row items-center gap-2">
+            <Pressable
+              onPress={() => router.push(`/production/${id}`)}
+              className="bg-gray-100 border border-gray-200 flex-row items-center px-3.5 py-2.5 rounded-xl active:bg-gray-200"
+            >
+              <Ionicons name="stats-chart" size={18} color="#1d4ed8" />
+              <Text className="text-primary-700 font-medium ml-1">
+                Producción
+              </Text>
+            </Pressable>
+            <Pressable
+              onPress={() => setShowAddService(true)}
+              className="bg-primary-600 flex-row items-center px-4 py-2.5 rounded-xl active:bg-primary-700"
+            >
+              <Ionicons name="add" size={18} color="white" />
+              <Text className="text-white font-medium ml-1">Servicio</Text>
+            </Pressable>
+          </View>
         </View>
 
         {/* Status legend */}

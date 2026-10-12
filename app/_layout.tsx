@@ -50,6 +50,14 @@ export default function RootLayout() {
               headerBackTitle: "Volver",
             }}
           />
+          <Stack.Screen
+            name="production/[projectId]"
+            options={{
+              headerShown: true,
+              title: "Producción",
+              headerBackTitle: "Volver",
+            }}
+          />
         </Stack>
         <StatusBar style="auto" />
       </QueryClientProvider>
