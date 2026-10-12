@@ -118,6 +118,33 @@ export interface CreateProductionEntryInput {
 }
 
 /**
+ * The entry row committed but its crew_members rows did not.
+ *
+ * These are two PostgREST requests, so two transactions: losing signal between
+ * them leaves a committed entry with no roster. That is a partial success, and
+ * it must not reach the user as a plain failure — the entry is already in the
+ * web approval queue, and a retry creates a second billable one. The screen
+ * branches on this type to say the entry WAS saved.
+ *
+ * The real fix is a single `create_production_entry_with_members(...)` RPC in
+ * `geoerp`; the web hook has the same two-step. Tracked in GRA-766.
+ */
+export class ProductionMembersError extends Error {
+  readonly entryId: string;
+
+  constructor(entryId: string, cause: unknown) {
+    super(
+      cause instanceof Error
+        ? cause.message
+        : "No se pudieron guardar los integrantes",
+    );
+    this.name = "ProductionMembersError";
+    this.entryId = entryId;
+    this.cause = cause;
+  }
+}
+
+/**
  * Create a production entry at the first tier of the approval workflow.
  *
  * The initial state matches what the web app's approval workflow expects
@@ -174,14 +201,23 @@ export function useCreateProductionEntry() {
             })),
           );
 
-        if (membersError) throw membersError;
+        // The entry is already committed at this point, so this is a partial
+        // success, not a failure. Carry the entry id so the caller can say so.
+        if (membersError) {
+          throw new ProductionMembersError(entry.id, membersError);
+        }
       }
 
       return entry as ProductionEntry;
     },
-    onSuccess: (entry) => {
+    // onSettled, not onSuccess: the error path can also have committed the
+    // entry row (see ProductionMembersError). Invalidating only on success
+    // leaves a 5-minute-stale list, which is also what the duplicate-entry
+    // banner reads, so the one case that most needs the warning would not get
+    // it. Keyed off `variables` because `data` is undefined on the error path.
+    onSettled: (_entry, _error, variables) => {
       queryClient.invalidateQueries({
-        queryKey: productionKeys.byProject(entry.project_id),
+        queryKey: productionKeys.byProject(variables.project_id),
       });
     },
   });

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -20,6 +20,7 @@ import {
   useCrewDefaultMembers,
   useCreateProductionEntry,
   useProjectProductionEntries,
+  ProductionMembersError,
 } from "../../lib/api/production";
 import { useAuthStore } from "../../lib/stores/auth-store";
 import { Input } from "../../components/ui/Input";
@@ -151,11 +152,32 @@ export default function ProductionEntryScreen() {
 
   // Picking a crew pre-selects its standing roster; the reporter then unchecks
   // whoever did not work the shift.
+  //
+  // Keyed on the crew, not on `defaultMembers` identity: the queryFn builds a
+  // new array on every fetch, so depending on the data meant any late refetch
+  // silently restored someone the reporter had just unchecked — and that lands
+  // in payroll.
+  const prefilledCrewRef = useRef<string | null>(null);
   useEffect(() => {
-    setMemberIds(defaultMembers?.map((m) => m.user_id) ?? []);
-  }, [defaultMembers]);
+    if (prefilledCrewRef.current === crewId) return;
+    if (!defaultMembers) {
+      // Crew just changed; drop the previous crew's roster right away rather
+      // than leaving their names selected until the new one arrives.
+      setMemberIds([]);
+      return;
+    }
+    prefilledCrewRef.current = crewId;
+    setMemberIds(defaultMembers.map((m) => m.user_id));
+  }, [crewId, defaultMembers]);
 
-  const canReport = !!role && REPORTING_ROLES.includes(role);
+  // RLS is the real authority on who may insert. `fetchUserRole` resolves the
+  // role with `.single()` over `user_roles`, which is many-to-many, so a user
+  // holding two roles comes back `null` — and a hard block would then deny a
+  // supervisor the database would have allowed. Block only on a KNOWN
+  // non-reporting role; when the role is unknown, let the insert run and let
+  // RLS answer (getErrorMessage turns that denial into plain language).
+  // The `.single()` defect is pre-existing and needs an auth-store refactor.
+  const canReport = role === null || REPORTING_ROLES.includes(role);
 
   const crewOptions: ChipOption[] = useMemo(
     () => (crews ?? []).map((crew) => ({ value: crew.id, label: crew.name })),
@@ -203,6 +225,19 @@ export default function ProductionEntryScreen() {
 
   const onSubmit = async (values: ProductionFormValues) => {
     Keyboard.dismiss();
+
+    // Clearing the units field is what stops a resubmit, so it runs on both
+    // the success path and the entry-saved-roster-failed path.
+    const clearForNextEntry = () =>
+      reset({
+        work_date: values.work_date,
+        crew_id: values.crew_id,
+        unit_type: values.unit_type,
+        units_completed: "",
+        line_segment_id: NO_SEGMENT,
+        notes: "",
+      });
+
     try {
       await createEntry.mutateAsync({
         project_id: projectId,
@@ -216,20 +251,28 @@ export default function ProductionEntryScreen() {
         crew_member_ids: memberIds,
       });
 
-      reset({
-        work_date: values.work_date,
-        crew_id: values.crew_id,
-        unit_type: values.unit_type,
-        units_completed: "",
-        line_segment_id: NO_SEGMENT,
-        notes: "",
-      });
+      clearForNextEntry();
 
       Alert.alert(
         "Producción registrada",
         "El reporte quedó en estado Reportado, pendiente de aprobación del supervisor.",
       );
     } catch (error) {
+      // The entry committed and only its roster failed. Telling the reporter
+      // this failed would invite a retry, and a retry here is a second
+      // billable entry in the approval queue that only an admin can delete.
+      if (error instanceof ProductionMembersError) {
+        console.warn(
+          `[ProductionEntry] entry ${error.entryId} saved without crew_members:`,
+          error.cause,
+        );
+        clearForNextEntry();
+        Alert.alert(
+          "Producción guardada — faltan los integrantes",
+          "El reporte SÍ quedó registrado y ya está en la cola de aprobación. NO lo vuelvas a enviar.\n\nLo único que no se guardó son los integrantes del turno. Pedile a un supervisor que los agregue desde la web.",
+        );
+        return;
+      }
       Alert.alert("No se pudo registrar", getErrorMessage(error));
     }
   };
@@ -521,7 +564,7 @@ export default function ProductionEntryScreen() {
 }
 
 function getErrorMessage(error: unknown): string {
-  if (!(error instanceof Error)) return "Error desconocido";
+  if (!(error instanceof Error)) return "Error desconocido. Intenta de nuevo.";
   const msg = error.message.toLowerCase();
   if (
     msg.includes("row-level security") ||
@@ -530,8 +573,14 @@ function getErrorMessage(error: unknown): string {
   ) {
     return "Tu usuario no tiene permiso para registrar producción en este proyecto.";
   }
+  if (msg.includes("no hay sesión activa")) {
+    return "Tu sesión expiró. Vuelve a iniciar sesión.";
+  }
   if (msg.includes("network") || msg.includes("fetch")) {
     return "Sin conexión. Vuelve a intentar cuando tengas señal.";
   }
-  return error.message;
+  // Anything left is a Postgres/PostgREST string. Useful in a log, not on a
+  // phone in the field.
+  console.warn("[ProductionEntry] unhandled create error:", error);
+  return "No se pudo guardar el reporte. Si vuelve a pasar, avisa a tu supervisor.";
 }
