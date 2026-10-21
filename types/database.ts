@@ -91,3 +91,38 @@ export interface PreExistingDamage
   extends Omit<PreExistingDamageRow, "geometry"> {
   geometry: GeoPoint;
 }
+
+// ---------------------------------------------------------------------------
+// Production tracking (GRA-133)
+// Mirrors the CHECK constraints on production_entries. The 3-tier approval
+// workflow lives in the web app (apps/web/src/hooks/use-production.ts); mobile
+// only creates entries at the first tier (`reported`).
+// ---------------------------------------------------------------------------
+export type UnitType = "drilling_ft" | "aerial_ft" | "duct_ft" | "trenching_ft";
+
+export type ProductionInternalStatus =
+  | "reported"
+  | "supervisor_approved"
+  | "admin_approved"
+  | "rejected";
+
+export type ProductionBillingStatus =
+  | "pending"
+  | "invoiced"
+  | "paid"
+  | "not_billable";
+
+export type ProductionEntryRow = Tables<"production_entries">;
+
+/** ProductionEntry with the CHECK-constrained text columns narrowed. */
+export interface ProductionEntry
+  extends Omit<
+    ProductionEntryRow,
+    "unit_type" | "internal_status" | "billing_status"
+  > {
+  unit_type: UnitType;
+  internal_status: ProductionInternalStatus;
+  billing_status: ProductionBillingStatus;
+}
+
+export type Crew = Tables<"crews">;

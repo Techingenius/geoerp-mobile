@@ -11,7 +11,7 @@ import {
   Image,
   StyleSheet,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, router, Stack } from "expo-router";
 import MapView, { Marker, Polyline } from "react-native-maps";
 import { Ionicons } from "@expo/vector-icons";
 import * as ImagePicker from "expo-image-picker";
@@ -388,6 +388,26 @@ export default function ProjectDetailScreen() {
 
   return (
     <View className="flex-1">
+      {/* "Producción" lives in the header, not the bottom bar. Two buttons
+          down there left ~84pt for the project name on a 375pt SE, which is
+          how "Servicio" ended up clipped. The header is also where a
+          secondary screen action belongs. */}
+      <Stack.Screen
+        options={{
+          headerRight: () => (
+            <Pressable
+              onPress={() => router.push(`/production/${id}`)}
+              hitSlop={10}
+              className="flex-row items-center active:opacity-60"
+            >
+              <Ionicons name="stats-chart" size={18} color="#1d4ed8" />
+              <Text className="text-primary-700 font-semibold ml-1.5">
+                Producción
+              </Text>
+            </Pressable>
+          ),
+        }}
+      />
       <MapView
         style={StyleSheet.absoluteFill}
         initialRegion={initialRegion}
@@ -435,16 +455,25 @@ export default function ProjectDetailScreen() {
 
       {/* Bottom info bar */}
       <View className="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-3 pb-8">
-        <View className="flex-row items-center justify-between mb-2">
-          <View>
-            <Text className="font-semibold text-gray-900">{project.name}</Text>
-            <Text className={`text-xs ${servicesError ? "text-red-500" : "text-gray-400"}`}>
+        <View className="flex-row items-center justify-between mb-2 gap-3">
+          {/* flex-1 + numberOfLines: flexShrink is 0 by default in RN, so
+              without this a long project name keeps its natural width and
+              pushes "Servicio" off the viewport. Real seed names already do
+              this — "Zona Industrial - Troncal Norte Fase 2" is 40 chars. */}
+          <View className="flex-1">
+            <Text className="font-semibold text-gray-900" numberOfLines={1}>
+              {project.name}
+            </Text>
+            <Text
+              className={`text-xs ${servicesError ? "text-red-500" : "text-gray-400"}`}
+              numberOfLines={1}
+            >
               {servicesError ? "Error cargando servicios" : `${services?.length ?? 0} servicios`} · {segments?.length ?? 0} tramos
             </Text>
           </View>
           <Pressable
             onPress={() => setShowAddService(true)}
-            className="bg-primary-600 flex-row items-center px-4 py-2.5 rounded-xl active:bg-primary-700"
+            className="bg-primary-600 flex-row items-center px-4 py-2.5 rounded-xl active:bg-primary-700 shrink-0"
           >
             <Ionicons name="add" size={18} color="white" />
             <Text className="text-white font-medium ml-1">Servicio</Text>
