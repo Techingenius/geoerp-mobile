@@ -1,18 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../supabase/client";
-import type {
-  Crew,
-  ProductionBillingStatus,
-  ProductionEntry,
-  ProductionInternalStatus,
-  UnitType,
-} from "../../types/database";
+import type { ProductionEntry, UnitType } from "../../types/database";
+import { segmentKeys } from "./segments";
 
 export const productionKeys = {
   all: ["production-entries"] as const,
   byProject: (projectId: string) =>
     ["production-entries", "project", projectId] as const,
-  activeCrews: ["crews", "active"] as const,
   crewDefaultMembers: (crewId: string) =>
     ["crew-default-members", crewId] as const,
 };
@@ -26,27 +20,6 @@ export interface CrewMemberOption {
 export interface ProductionEntryWithNames extends ProductionEntry {
   crew?: { name: string } | null;
   reported_by_user?: { full_name: string | null } | null;
-}
-
-/**
- * Active crews in the caller's organization.
- * RLS (`crews.organization_id = current_user_org()`) does the org scoping, so
- * no organization_id filter is needed — nor would one be trustworthy here.
- */
-export function useActiveCrews() {
-  return useQuery({
-    queryKey: productionKeys.activeCrews,
-    queryFn: async (): Promise<Crew[]> => {
-      const { data, error } = await supabase
-        .from("crews")
-        .select("*")
-        .eq("is_active", true)
-        .order("name");
-
-      if (error) throw error;
-      return data ?? [];
-    },
-  });
 }
 
 /**
@@ -107,118 +80,123 @@ export function useProjectProductionEntries(projectId: string | undefined) {
 export interface CreateProductionEntryInput {
   project_id: string;
   line_segment_id?: string | null;
+  /**
+   * The segment activity being reported — a `project_budgets` line, i.e. one
+   * Wave product. Required once the segment has planned activities; the
+   * database refuses the entry otherwise (GRA-831).
+   */
+  budget_line_id?: string | null;
   crew_id: string;
   units_completed: number;
   unit_type: UnitType;
   /** Work date as `YYYY-MM-DD`; the column is a DATE, not a timestamp. */
   work_date: string;
   notes?: string | null;
+  /** Why this entry takes the activity past its planned quantity. */
+  overproduction_reason?: string | null;
   /** Workers who actually worked the shift; may be empty. */
   crew_member_ids: string[];
 }
 
 /**
- * The entry row committed but its crew_members rows did not.
- *
- * These are two PostgREST requests, so two transactions: losing signal between
- * them leaves a committed entry with no roster. That is a partial success, and
- * it must not reach the user as a plain failure — the entry is already in the
- * web approval queue, and a retry creates a second billable one. The screen
- * branches on this type to say the entry WAS saved.
- *
- * The real fix is a single `create_production_entry_with_members(...)` RPC in
- * `geoerp`; the web hook has the same two-step. Tracked in GRA-766.
+ * A plan rule the database refused the entry on, in terms the screen can act
+ * on. All three come back as `check_violation` (23514) from the segment
+ * activity trigger, and telling them apart by `hint` is what turns "no se pudo
+ * guardar" into a field instruction.
  */
-export class ProductionMembersError extends Error {
-  readonly entryId: string;
+export type ProductionPlanRejection =
+  | "overproduction_reason_required"
+  | "activity_required"
+  | "activity_not_on_segment";
 
-  constructor(entryId: string, cause: unknown) {
-    super(
-      cause instanceof Error
-        ? cause.message
-        : "No se pudieron guardar los integrantes",
-    );
-    this.name = "ProductionMembersError";
-    this.entryId = entryId;
-    this.cause = cause;
+/** Postgres check_violation. */
+const CHECK_VIOLATION = "23514";
+
+/**
+ * Which plan rule, if any, rejected this entry.
+ *
+ * The mobile form asks for a reason itself whenever the quantity goes past
+ * what the activity has left, so reaching the overproduction branch means the
+ * remaining quantity moved underneath us — another crew reported on the same
+ * activity between the screen loading and the send.
+ */
+export function classifyPlanRejection(
+  error: unknown,
+): ProductionPlanRejection | null {
+  if (!isPostgrestError(error) || error.code !== CHECK_VIOLATION) return null;
+
+  const hint = error.hint ?? "";
+  if (hint.includes("overproduction_reason")) {
+    return "overproduction_reason_required";
   }
+  if (hint.includes("Pass the budget line")) return "activity_required";
+  if (hint.includes("Add the activity to the segment")) {
+    return "activity_not_on_segment";
+  }
+  return null;
+}
+
+function isPostgrestError(
+  error: unknown,
+): error is { code: string; hint: string | null; message: string } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as { code?: unknown }).code === "string"
+  );
 }
 
 /**
  * Create a production entry at the first tier of the approval workflow.
  *
- * The initial state matches what the web app's approval workflow expects
- * (`apps/web/src/hooks/use-production.ts`): `internal_status: 'reported'` and
- * `billing_status: 'pending'`, both written explicitly rather than left to the
- * column defaults. Supervisor/admin approval and billing transitions stay on
- * the web side.
+ * One RPC, one transaction (GRA-766): the entry and its `crew_members` rows
+ * commit together, so a failed call leaves nothing behind and is safe to
+ * retry. The two-step insert this replaced could commit the entry and lose
+ * the roster, which put a billable entry in the approval queue that the
+ * reporter was told had failed.
  *
- * `project_id` is sent on the insert because every RLS policy on this table
- * resolves the org through `production_entries.project_id` — the same scope
- * field whose omission broke service creation in GRA-396.
+ * `create_production_entry` is SECURITY INVOKER, so the same RLS decides who
+ * may write: admins and supervisors, and crew leads or standing members of
+ * the crew they report for (GRA-767). `internal_status` and `billing_status`
+ * are set by the function, not by the caller.
  */
 export function useCreateProductionEntry() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (input: CreateProductionEntryInput) => {
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) throw new Error("No hay sesión activa");
-
       const notes = input.notes?.trim();
+      const reason = input.overproduction_reason?.trim();
 
-      const { data: entry, error } = await supabase
-        .from("production_entries")
-        .insert({
-          project_id: input.project_id,
-          line_segment_id: input.line_segment_id ?? null,
-          crew_id: input.crew_id,
-          units_completed: input.units_completed,
-          unit_type: input.unit_type,
-          work_date: input.work_date,
-          notes: notes ? notes : null,
-          reported_by: user.id,
-          created_by: user.id,
-          internal_status: "reported" satisfies ProductionInternalStatus,
-          billing_status: "pending" satisfies ProductionBillingStatus,
-        })
-        .select()
-        .single();
+      // Optional RPC arguments are typed as present-or-absent, not nullable:
+      // an explicit null is not the same as letting the parameter default.
+      const { data, error } = await supabase.rpc("create_production_entry", {
+        p_project_id: input.project_id,
+        p_crew_id: input.crew_id,
+        p_units_completed: input.units_completed,
+        p_unit_type: input.unit_type,
+        p_work_date: input.work_date,
+        p_crew_member_ids: input.crew_member_ids,
+        ...(input.line_segment_id
+          ? { p_line_segment_id: input.line_segment_id }
+          : {}),
+        ...(input.budget_line_id
+          ? { p_budget_line_id: input.budget_line_id }
+          : {}),
+        ...(notes ? { p_notes: notes } : {}),
+        ...(reason ? { p_overproduction_reason: reason } : {}),
+      });
 
       if (error) throw error;
-
-      if (input.crew_member_ids.length > 0) {
-        const { error: membersError } = await supabase
-          .from("crew_members")
-          .insert(
-            input.crew_member_ids.map((user_id) => ({
-              production_entry_id: entry.id,
-              user_id,
-              rate_applied: null,
-            })),
-          );
-
-        // The entry is already committed at this point, so this is a partial
-        // success, not a failure. Carry the entry id so the caller can say so.
-        if (membersError) {
-          throw new ProductionMembersError(entry.id, membersError);
-        }
-      }
-
-      return entry as ProductionEntry;
+      return data as unknown as ProductionEntry;
     },
-    // onSettled, not onSuccess: the error path can also have committed the
-    // entry row (see ProductionMembersError). Invalidating only on success
-    // leaves a 5-minute-stale list, which is also what the duplicate-entry
-    // banner reads, so the one case that most needs the warning would not get
-    // it. Keyed off `variables` because `data` is undefined on the error path.
-    onSettled: (_entry, _error, variables) => {
+    onSuccess: (_entry, variables) => {
       queryClient.invalidateQueries({
         queryKey: productionKeys.byProject(variables.project_id),
       });
+      // The entry changes what the activity has left to report, which is the
+      // suggested quantity on the next one.
+      queryClient.invalidateQueries({ queryKey: segmentKeys.all });
     },
   });
 }
