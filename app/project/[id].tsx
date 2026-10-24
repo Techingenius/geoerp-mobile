@@ -391,20 +391,36 @@ export default function ProjectDetailScreen() {
       {/* "Producción" lives in the header, not the bottom bar. Two buttons
           down there left ~84pt for the project name on a 375pt SE, which is
           how "Servicio" ended up clipped. The header is also where a
-          secondary screen action belongs. */}
+          secondary screen action belongs.
+
+          "Tramos" sits next to it as an icon with no label: the title here is
+          the short static "Proyecto", but two labelled pills plus the back
+          button do not fit a 375pt header, and the one that would truncate is
+          the title. */}
       <Stack.Screen
         options={{
           headerRight: () => (
-            <Pressable
-              onPress={() => router.push(`/production/${id}`)}
-              hitSlop={10}
-              className="flex-row items-center active:opacity-60"
-            >
-              <Ionicons name="stats-chart" size={18} color="#1d4ed8" />
-              <Text className="text-primary-700 font-semibold ml-1.5">
-                Producción
-              </Text>
-            </Pressable>
+            <View className="flex-row items-center gap-4">
+              <Pressable
+                onPress={() => router.push(`/segments/${id}`)}
+                hitSlop={10}
+                accessibilityRole="button"
+                accessibilityLabel="Mis tramos asignados"
+                className="active:opacity-60"
+              >
+                <Ionicons name="git-branch" size={22} color="#1d4ed8" />
+              </Pressable>
+              <Pressable
+                onPress={() => router.push(`/production/${id}`)}
+                hitSlop={10}
+                className="flex-row items-center active:opacity-60"
+              >
+                <Ionicons name="stats-chart" size={18} color="#1d4ed8" />
+                <Text className="text-primary-700 font-semibold ml-1.5">
+                  Producción
+                </Text>
+              </Pressable>
+            </View>
           ),
         }}
       />
