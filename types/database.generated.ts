@@ -367,6 +367,7 @@ export type Database = {
           is_internal_transfer: boolean
           organization_id: string
           removed_in_wave_at: string | null
+          payroll_review_since: string | null
           review_amount: number | null
           review_direction: string | null
           review_reason: string | null
@@ -391,6 +392,7 @@ export type Database = {
           is_internal_transfer?: boolean
           organization_id: string
           removed_in_wave_at?: string | null
+          payroll_review_since?: string | null
           review_amount?: number | null
           review_direction?: string | null
           review_reason?: string | null
@@ -415,6 +417,7 @@ export type Database = {
           is_internal_transfer?: boolean
           organization_id?: string
           removed_in_wave_at?: string | null
+          payroll_review_since?: string | null
           review_amount?: number | null
           review_direction?: string | null
           review_reason?: string | null
@@ -1894,6 +1897,57 @@ export type Database = {
           },
         ]
       }
+      payroll_period_settings: {
+        Row: {
+          anchor_date: string | null
+          created_at: string
+          created_by: string | null
+          effective_from: string
+          id: string
+          organization_id: string
+          payment_lag_days: number
+          period_type: string
+          updated_at: string
+        }
+        Insert: {
+          anchor_date?: string | null
+          created_at?: string
+          created_by?: string | null
+          effective_from: string
+          id?: string
+          organization_id: string
+          payment_lag_days?: number
+          period_type: string
+          updated_at?: string
+        }
+        Update: {
+          anchor_date?: string | null
+          created_at?: string
+          created_by?: string | null
+          effective_from?: string
+          id?: string
+          organization_id?: string
+          payment_lag_days?: number
+          period_type?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payroll_period_settings_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_period_settings_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       payroll_period_workers: {
         Row: {
           advances_deducted: number
@@ -2179,6 +2233,7 @@ export type Database = {
         Row: {
           admin_approved_at: string | null
           admin_approved_by: string | null
+          billed_unit_price: number | null
           billing_status: string
           budget_line_id: string | null
           client_approval_notes: string | null
@@ -2210,6 +2265,7 @@ export type Database = {
         Insert: {
           admin_approved_at?: string | null
           admin_approved_by?: string | null
+          billed_unit_price?: number | null
           billing_status?: string
           budget_line_id?: string | null
           client_approval_notes?: string | null
@@ -2241,6 +2297,7 @@ export type Database = {
         Update: {
           admin_approved_at?: string | null
           admin_approved_by?: string | null
+          billed_unit_price?: number | null
           billing_status?: string
           budget_line_id?: string | null
           client_approval_notes?: string | null
@@ -3859,6 +3916,7 @@ export type Database = {
           organization_id: string | null
           overhead_amount: number | null
           removed_in_wave_at: string | null
+          payroll_review_since: string | null
           review_amount: number | null
           review_direction: string | null
           review_reason: string | null
@@ -3995,6 +4053,7 @@ export type Database = {
         Args: { p_period_id: string }
         Returns: Json
       }
+      get_payroll_period_settings: { Args: never; Returns: Json }
       get_payroll_summary: {
         Args: {
           p_org_id: string
@@ -4084,7 +4143,21 @@ export type Database = {
       }
       open_payroll_period: { Args: { p_date: string }; Returns: string }
       payroll_period_bounds: {
-        Args: { p_date: string }
+        Args: { p_date: string; p_org: string }
+        Returns: Record<string, unknown>
+      }
+      payroll_period_bounds_for: {
+        Args: {
+          p_anchor_date?: string
+          p_ceiling?: string
+          p_date: string
+          p_floor?: string
+          p_period_type: string
+        }
+        Returns: Record<string, unknown>
+      }
+      payroll_period_config: {
+        Args: { p_date: string; p_org: string }
         Returns: Record<string, unknown>
       }
       project_budget_line_labels: {
@@ -4100,6 +4173,14 @@ export type Database = {
       }
       reconcile_wave_export: {
         Args: { p_dry_run?: boolean; p_external_ids: string[] }
+        Returns: Json
+      }
+      set_payroll_period_settings: {
+        Args: {
+          p_anchor_date?: string
+          p_payment_lag_days?: number
+          p_period_type: string
+        }
         Returns: Json
       }
       set_transaction_allocations: {
