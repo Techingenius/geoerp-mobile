@@ -8,19 +8,30 @@ import {
   KeyboardAvoidingView,
   Platform,
   Keyboard,
+  Pressable,
 } from "react-native";
-import { useLocalSearchParams } from "expo-router";
+import { useLocalSearchParams, router } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useForm, Controller } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
-import { useProject, useProjectSegments } from "../../lib/api/projects";
+import { useProject } from "../../lib/api/projects";
+import { useReportableCrews } from "../../lib/api/crews";
 import {
-  useActiveCrews,
+  activityLabel,
+  budgetLineLabel,
+  formatQty,
+  useBudgetLineLabels,
+  useSegmentProgress,
+  UNIT_SUFFIX,
+  UNIT_TYPE_LABEL,
+  type SegmentActivity,
+} from "../../lib/api/segments";
+import {
   useCrewDefaultMembers,
   useCreateProductionEntry,
   useProjectProductionEntries,
-  ProductionMembersError,
+  classifyPlanRejection,
 } from "../../lib/api/production";
 import { useAuthStore } from "../../lib/stores/auth-store";
 import { Input } from "../../components/ui/Input";
@@ -33,18 +44,16 @@ import type {
   UnitType,
 } from "../../types/database";
 
-const UNIT_TYPE_OPTIONS: { value: UnitType; label: string }[] = [
-  { value: "drilling_ft", label: "Perforación (ft)" },
-  { value: "aerial_ft", label: "Aéreo (ft)" },
-  { value: "duct_ft", label: "Ducto (ft)" },
-  { value: "trenching_ft", label: "Zanja (ft)" },
-];
+const UNIT_TYPE_OPTIONS: { value: UnitType; label: string }[] = (
+  ["drilling_ft", "aerial_ft", "duct_ft", "trenching_ft", "unit"] as const
+).map((value) => ({ value, label: UNIT_TYPE_LABEL[value] }));
 
 const UNIT_TYPE_SHORT: Record<UnitType, string> = {
   drilling_ft: "perforación",
   aerial_ft: "aéreo",
   duct_ft: "ducto",
   trenching_ft: "zanja",
+  unit: "unidades",
 };
 
 const STATUS_BADGE: Record<
@@ -57,10 +66,8 @@ const STATUS_BADGE: Record<
   rejected: { label: "Rechazado", variant: "danger" },
 };
 
-/** Roles whose RLS grant allows INSERT on production_entries. */
-const REPORTING_ROLES = ["admin", "supervisor"];
-
 const NO_SEGMENT = "__none__";
+const NO_ACTIVITY = "";
 
 function toISODate(date: Date): string {
   const y = date.getFullYear();
@@ -98,7 +105,13 @@ const productionSchema = z.object({
       "No puedes reportar producción futura",
     ),
   crew_id: z.string().min(1, "Selecciona una cuadrilla"),
-  unit_type: z.enum(["drilling_ft", "aerial_ft", "duct_ft", "trenching_ft"]),
+  unit_type: z.enum([
+    "drilling_ft",
+    "aerial_ft",
+    "duct_ft",
+    "trenching_ft",
+    "unit",
+  ]),
   // Kept as a string so the form's input and output types match; converted once
   // on submit. The column is NUMERIC(10,2).
   units_completed: z
@@ -110,30 +123,52 @@ const productionSchema = z.object({
     )
     .refine((value) => Number(value) > 0, "Debe ser mayor a 0"),
   line_segment_id: z.string(),
+  // Which of the segment's activities is being billed. Required once the
+  // segment has any; checked on submit, where the segment's activities are
+  // known, rather than in the schema, which cannot see them.
+  budget_line_id: z.string(),
+  overproduction_reason: z.string().max(500, "Máximo 500 caracteres"),
   notes: z.string().max(1000, "Máximo 1000 caracteres"),
 });
 
 type ProductionFormValues = z.infer<typeof productionSchema>;
 
 export default function ProductionEntryScreen() {
-  const { projectId } = useLocalSearchParams<{ projectId: string }>();
+  const { projectId, segmentId, budgetLineId } = useLocalSearchParams<{
+    projectId: string;
+    segmentId?: string;
+    budgetLineId?: string;
+  }>();
+  const userId = useAuthStore((s) => s.user?.id);
   const role = useAuthStore((s) => s.role);
 
   const { data: project, isLoading: loadingProject } = useProject(projectId);
-  const { data: segments } = useProjectSegments(projectId);
-  const { data: crews, isLoading: loadingCrews } = useActiveCrews();
+  const { data: reportableCrews, isLoading: loadingCrews } =
+    useReportableCrews(userId);
   const { data: entries, isLoading: loadingEntries } =
     useProjectProductionEntries(projectId);
+  const { data: lineLabels } = useBudgetLineLabels(projectId);
   const createEntry = useCreateProductionEntry();
 
   const [memberIds, setMemberIds] = useState<string[]>([]);
+  // Set when the database — not the form — asks for an overproduction reason,
+  // which happens when another crew reports on the activity between this
+  // screen loading and the send.
+  const [reasonDemanded, setReasonDemanded] = useState(false);
   const scrollRef = useRef<ScrollView>(null);
+
+  // Memoised, not `?? []`: a fresh empty array on every render re-runs the
+  // crew effect and the chip memo below on every keystroke in the form.
+  const crews = useMemo(() => reportableCrews?.crews ?? [], [reportableCrews]);
 
   const {
     control,
     handleSubmit,
     watch,
     reset,
+    setValue,
+    setError,
+    getValues,
     formState: { errors, isSubmitting },
   } = useForm<ProductionFormValues>({
     resolver: zodResolver(productionSchema),
@@ -142,14 +177,36 @@ export default function ProductionEntryScreen() {
       crew_id: "",
       unit_type: "drilling_ft",
       units_completed: "",
-      line_segment_id: NO_SEGMENT,
+      line_segment_id: segmentId ?? NO_SEGMENT,
+      budget_line_id: budgetLineId ?? NO_ACTIVITY,
+      overproduction_reason: "",
       notes: "",
     },
   });
 
   const crewId = watch("crew_id");
   const workDate = watch("work_date");
+  const lineSegmentId = watch("line_segment_id");
+  const selectedBudgetLineId = watch("budget_line_id");
+  const unitsCompleted = watch("units_completed");
   const { data: defaultMembers } = useCrewDefaultMembers(crewId || undefined);
+
+  // A crew lead picks among their own crew's segments; an admin or supervisor
+  // plans the whole project and gets all of them. Keyed on the role rather
+  // than on crew membership, so a supervisor who also happens to sit on a
+  // crew's roster does not silently lose the rest of the project.
+  const seesAllSegments = role === "admin" || role === "supervisor";
+  const { data: segments } = useSegmentProgress(
+    projectId,
+    seesAllSegments ? null : crewId || null,
+  );
+
+  // One crew to report for is the normal case for a crew lead: select it
+  // rather than making them tap the only chip on screen.
+  useEffect(() => {
+    if (crewId || crews.length !== 1) return;
+    setValue("crew_id", crews[0].id);
+  }, [crewId, crews, setValue]);
 
   // Picking a crew pre-selects its standing roster; the reporter then unchecks
   // whoever did not work the shift.
@@ -171,17 +228,8 @@ export default function ProductionEntryScreen() {
     setMemberIds(defaultMembers.map((m) => m.user_id));
   }, [crewId, defaultMembers]);
 
-  // RLS is the real authority on who may insert. `fetchUserRole` resolves the
-  // role with `.single()` over `user_roles`, which is many-to-many, so a user
-  // holding two roles comes back `null` — and a hard block would then deny a
-  // supervisor the database would have allowed. Block only on a KNOWN
-  // non-reporting role; when the role is unknown, let the insert run and let
-  // RLS answer (getErrorMessage turns that denial into plain language).
-  // The `.single()` defect is pre-existing and needs an auth-store refactor.
-  const canReport = role === null || REPORTING_ROLES.includes(role);
-
   const crewOptions: ChipOption[] = useMemo(
-    () => (crews ?? []).map((crew) => ({ value: crew.id, label: crew.name })),
+    () => crews.map((crew) => ({ value: crew.id, label: crew.name })),
     [crews],
   );
 
@@ -195,6 +243,90 @@ export default function ProductionEntryScreen() {
     ],
     [segments],
   );
+
+  const selectedSegment = useMemo(
+    () => (segments ?? []).find((segment) => segment.id === lineSegmentId),
+    [segments, lineSegmentId],
+  );
+
+  const activities: SegmentActivity[] = useMemo(
+    () => selectedSegment?.activities ?? [],
+    [selectedSegment],
+  );
+
+  const selectedActivity = useMemo(
+    () =>
+      activities.find(
+        (activity) => activity.budget_line_id === selectedBudgetLineId,
+      ),
+    [activities, selectedBudgetLineId],
+  );
+
+  const activityOptions: ChipOption[] = useMemo(
+    () =>
+      activities.map((activity) => ({
+        value: activity.budget_line_id,
+        label: `${activityLabel(activity)} · faltan ${formatQty(activity.remaining)} ${UNIT_SUFFIX[activity.unit_type]}`,
+      })),
+    [activities],
+  );
+
+  // Keep the chosen activity consistent with the chosen segment: drop one that
+  // belongs to another segment, and take the only one when there is only one.
+  // Written so that re-running it changes nothing.
+  useEffect(() => {
+    if (lineSegmentId === NO_SEGMENT) {
+      if (selectedBudgetLineId) setValue("budget_line_id", NO_ACTIVITY);
+      return;
+    }
+    // Until the segments arrive, this segment's activities are an empty list
+    // rather than none — and clearing against that would throw away the
+    // activity the crew tapped on the map to get here.
+    if (!segments || !selectedSegment) return;
+
+    const ids = activities.map((activity) => activity.budget_line_id);
+    if (selectedBudgetLineId && !ids.includes(selectedBudgetLineId)) {
+      setValue("budget_line_id", NO_ACTIVITY);
+      return;
+    }
+    if (!selectedBudgetLineId && activities.length === 1) {
+      setValue("budget_line_id", activities[0].budget_line_id);
+    }
+  }, [
+    segments,
+    selectedSegment,
+    activities,
+    lineSegmentId,
+    selectedBudgetLineId,
+    setValue,
+  ]);
+
+  // What is left on the activity is almost always what is being reported, so
+  // it goes in the field as a suggestion. Only overwritten while the field
+  // still holds what we put there: once the reporter types their own number,
+  // a refetch must not move it.
+  const suggestedUnits =
+    selectedActivity && selectedActivity.remaining > 0
+      ? formatQty(selectedActivity.remaining)
+      : "";
+  const suggestionRef = useRef<string>("");
+  useEffect(() => {
+    if (!suggestedUnits) return;
+    const current = getValues("units_completed");
+    if (current !== "" && current !== suggestionRef.current) return;
+    suggestionRef.current = suggestedUnits;
+    setValue("units_completed", suggestedUnits);
+  }, [suggestedUnits, getValues, setValue]);
+
+  // The unit is the activity's, taken from its budget line. Only a report with
+  // no activity behind it still picks one by hand.
+  const unitTypeValue = watch("unit_type");
+  const effectiveUnit: UnitType = selectedActivity?.unit_type ?? unitTypeValue;
+
+  const overPlan =
+    !!selectedActivity &&
+    Number(unitsCompleted || 0) > selectedActivity.remaining;
+  const showReason = overPlan || reasonDemanded;
 
   const memberOptions: ChipOption[] = useMemo(
     () =>
@@ -235,28 +367,56 @@ export default function ProductionEntryScreen() {
   const onSubmit = async (values: ProductionFormValues) => {
     Keyboard.dismiss();
 
+    // Both of these are database rules (GRA-831). Checking them here is not a
+    // substitute for the trigger — it is what turns a 400 into a sentence the
+    // reporter can act on without losing what they typed.
+    if (activities.length > 0 && !values.budget_line_id) {
+      setError("budget_line_id", {
+        message: "Elegí la actividad que estás reportando",
+      });
+      onInvalid();
+      return;
+    }
+
+    if (showReason && !values.overproduction_reason.trim()) {
+      setError("overproduction_reason", {
+        message: "Explica por qué se pasa de lo planeado",
+      });
+      onInvalid();
+      return;
+    }
+
     // Clearing the units field is what stops a resubmit, so it runs on both
-    // the success path and the entry-saved-roster-failed path.
-    const clearForNextEntry = () =>
+    // the success path and the entry-saved path.
+    const clearForNextEntry = () => {
+      suggestionRef.current = "";
+      setReasonDemanded(false);
       reset({
         work_date: values.work_date,
         crew_id: values.crew_id,
         unit_type: values.unit_type,
         units_completed: "",
         line_segment_id: NO_SEGMENT,
+        budget_line_id: NO_ACTIVITY,
+        overproduction_reason: "",
         notes: "",
       });
+    };
 
     try {
       await createEntry.mutateAsync({
         project_id: projectId,
         line_segment_id:
           values.line_segment_id === NO_SEGMENT ? null : values.line_segment_id,
+        budget_line_id: values.budget_line_id || null,
         crew_id: values.crew_id,
         units_completed: Number(values.units_completed),
-        unit_type: values.unit_type,
+        unit_type: effectiveUnit,
         work_date: values.work_date,
         notes: values.notes,
+        overproduction_reason: showReason
+          ? values.overproduction_reason
+          : null,
         crew_member_ids: memberIds,
       });
 
@@ -267,22 +427,44 @@ export default function ProductionEntryScreen() {
         "El reporte quedó en estado Reportado, pendiente de aprobación del supervisor.",
       );
     } catch (error) {
-      // The entry committed and only its roster failed. Telling the reporter
-      // this failed would invite a retry, and a retry here is a second
-      // billable entry in the approval queue that only an admin can delete.
-      if (error instanceof ProductionMembersError) {
-        console.warn(
-          `[ProductionEntry] entry ${error.entryId} saved without crew_members:`,
-          error.cause,
-        );
-        clearForNextEntry();
-        Alert.alert(
-          "Producción guardada — faltan los integrantes",
-          "El reporte SÍ quedó registrado y ya está en la cola de aprobación. NO lo vuelvas a enviar.\n\nLo único que no se guardó son los integrantes del turno. Pedile a un supervisor que los agregue desde la web.",
-        );
-        return;
+      switch (classifyPlanRejection(error)) {
+        case "overproduction_reason_required":
+          // The remaining quantity moved under us. Nothing was written —
+          // the entry and its roster are one transaction — so the reporter
+          // adds the reason and sends the same form again.
+          setReasonDemanded(true);
+          setError("overproduction_reason", {
+            message: "Explica por qué se pasa de lo planeado",
+          });
+          onInvalid();
+          Alert.alert(
+            "Falta el motivo",
+            "Entre que abriste la pantalla y enviaste, alguien más reportó sobre esta actividad y tu cantidad ya pasa de lo planeado. Escribí el motivo y volvé a enviar.",
+          );
+          return;
+        case "activity_required":
+          setError("budget_line_id", {
+            message: "Elegí la actividad que estás reportando",
+          });
+          onInvalid();
+          Alert.alert(
+            "Elegí la actividad",
+            "Este tramo tiene más de una actividad con esta unidad, así que hay que decir cuál se está reportando.",
+          );
+          return;
+        case "activity_not_on_segment":
+          setError("budget_line_id", {
+            message: "Esa actividad no es de este tramo",
+          });
+          onInvalid();
+          Alert.alert(
+            "La actividad no es de este tramo",
+            "El plan del tramo cambió. Desliza para actualizar y elegí una de sus actividades.",
+          );
+          return;
+        default:
+          Alert.alert("No se pudo registrar", getErrorMessage(error));
       }
-      Alert.alert("No se pudo registrar", getErrorMessage(error));
     }
   };
 
@@ -320,93 +502,148 @@ export default function ProductionEntryScreen() {
           <Text className="text-sm text-gray-500 mt-1">{project.name}</Text>
         </View>
 
-        {!canReport ? (
-          <Card>
-            <CardContent className="gap-2">
-              <View className="flex-row items-center gap-2">
-                <Ionicons name="lock-closed-outline" size={18} color="#b45309" />
-                <Text className="font-semibold text-gray-900">
-                  Tu rol no puede reportar producción
-                </Text>
-              </View>
-              <Text className="text-sm text-gray-600">
-                Solo <Text className="font-semibold">admin</Text> y{" "}
-                <Text className="font-semibold">supervisor</Text> pueden
-                registrar producción. Pídele al líder de tu cuadrilla que
-                registre la producción del turno.
-              </Text>
-            </CardContent>
-          </Card>
-        ) : (
-          <Card>
-            <CardContent className="gap-5">
-              {/* Work date */}
+        <Card>
+          <CardContent className="gap-5">
+            {/* Work date */}
+            <Controller
+              control={control}
+              name="work_date"
+              render={({ field: { onChange, value } }) => (
+                <View className="gap-2">
+                  <Input
+                    label="Fecha del trabajo"
+                    placeholder="AAAA-MM-DD"
+                    value={value}
+                    onChangeText={onChange}
+                    keyboardType="numbers-and-punctuation"
+                    autoCapitalize="none"
+                    autoCorrect={false}
+                    maxLength={10}
+                    error={errors.work_date?.message}
+                    icon={
+                      <Ionicons
+                        name="calendar-outline"
+                        size={20}
+                        color="#9CA3AF"
+                      />
+                    }
+                  />
+                  <View className="flex-row gap-2">
+                    <Button
+                      title="Hoy"
+                      size="sm"
+                      variant={value === shiftDays(0) ? "primary" : "secondary"}
+                      onPress={() => onChange(shiftDays(0))}
+                    />
+                    <Button
+                      title="Ayer"
+                      size="sm"
+                      variant={
+                        value === shiftDays(-1) ? "primary" : "secondary"
+                      }
+                      onPress={() => onChange(shiftDays(-1))}
+                    />
+                  </View>
+                </View>
+              )}
+            />
+
+            {/* Crew */}
+            <Controller
+              control={control}
+              name="crew_id"
+              render={({ field: { onChange, value } }) => (
+                <ChipSelect
+                  label="Cuadrilla"
+                  options={crewOptions}
+                  selected={value}
+                  onSelect={onChange}
+                  error={errors.crew_id?.message}
+                  emptyLabel={
+                    loadingCrews
+                      ? "Cargando cuadrillas..."
+                      : "No estás en ninguna cuadrilla activa. Pídele a tu supervisor que te agregue."
+                  }
+                />
+              )}
+            />
+
+            {/* Line segment */}
+            <Controller
+              control={control}
+              name="line_segment_id"
+              render={({ field: { onChange, value } }) => (
+                <View className="gap-2">
+                  <ChipSelect
+                    label={seesAllSegments ? "Tramo" : "Tramo (mis tramos)"}
+                    options={segmentOptions}
+                    selected={value}
+                    onSelect={onChange}
+                    error={errors.line_segment_id?.message}
+                  />
+                  <Pressable
+                    onPress={() => router.push(`/segments/${projectId}`)}
+                    hitSlop={8}
+                    className="flex-row items-center active:opacity-60"
+                  >
+                    <Ionicons name="map-outline" size={16} color="#1d4ed8" />
+                    <Text className="text-xs font-medium text-primary-700 ml-1.5">
+                      Elegirlo en el mapa
+                    </Text>
+                  </Pressable>
+                </View>
+              )}
+            />
+
+            {/* Activity on the segment */}
+            {lineSegmentId !== NO_SEGMENT && (
               <Controller
                 control={control}
-                name="work_date"
+                name="budget_line_id"
                 render={({ field: { onChange, value } }) => (
                   <View className="gap-2">
-                    <Input
-                      label="Fecha del trabajo"
-                      placeholder="AAAA-MM-DD"
-                      value={value}
-                      onChangeText={onChange}
-                      keyboardType="numbers-and-punctuation"
-                      autoCapitalize="none"
-                      autoCorrect={false}
-                      maxLength={10}
-                      error={errors.work_date?.message}
-                      icon={
-                        <Ionicons
-                          name="calendar-outline"
-                          size={20}
-                          color="#9CA3AF"
-                        />
-                      }
+                    <ChipSelect
+                      label="Actividad"
+                      options={activityOptions}
+                      selected={value}
+                      onSelect={onChange}
+                      wrap
+                      error={errors.budget_line_id?.message}
+                      emptyLabel="Este tramo no tiene actividades planeadas; se reporta por tipo de unidad."
                     />
-                    <View className="flex-row gap-2">
-                      <Button
-                        title="Hoy"
-                        size="sm"
-                        variant={
-                          value === shiftDays(0) ? "primary" : "secondary"
-                        }
-                        onPress={() => onChange(shiftDays(0))}
-                      />
-                      <Button
-                        title="Ayer"
-                        size="sm"
-                        variant={
-                          value === shiftDays(-1) ? "primary" : "secondary"
-                        }
-                        onPress={() => onChange(shiftDays(-1))}
-                      />
-                    </View>
+                    {selectedActivity && (
+                      <View className="flex-row items-center gap-2">
+                        <Badge
+                          label={`Plan ${formatQty(selectedActivity.planned_qty)} ${UNIT_SUFFIX[selectedActivity.unit_type]}`}
+                          variant="muted"
+                        />
+                        <Badge
+                          label={`Aprobado ${formatQty(selectedActivity.approved_units)}`}
+                          variant="success"
+                        />
+                        <Badge
+                          label={`Reportado ${formatQty(selectedActivity.reported_units)}`}
+                          variant="warning"
+                        />
+                      </View>
+                    )}
                   </View>
                 )}
               />
+            )}
 
-              {/* Crew */}
-              <Controller
-                control={control}
-                name="crew_id"
-                render={({ field: { onChange, value } }) => (
-                  <ChipSelect
-                    label="Cuadrilla"
-                    options={crewOptions}
-                    selected={value}
-                    onSelect={onChange}
-                    error={errors.crew_id?.message}
-                    emptyLabel={
-                      loadingCrews
-                        ? "Cargando cuadrillas..."
-                        : "No hay cuadrillas activas en tu organización"
-                    }
-                  />
-                )}
-              />
-
-              {/* Unit type */}
+            {/* Unit type — only when no activity decides it */}
+            {selectedActivity ? (
+              <View className="gap-1">
+                <Text className="text-sm font-medium text-gray-700">
+                  Tipo de unidad
+                </Text>
+                <Text className="text-sm text-gray-500">
+                  {UNIT_TYPE_LABEL[selectedActivity.unit_type]} · lo define la
+                  actividad
+                </Text>
+              </View>
+            ) : (
               <Controller
                 control={control}
                 name="unit_type"
@@ -416,104 +653,129 @@ export default function ProductionEntryScreen() {
                     options={UNIT_TYPE_OPTIONS}
                     selected={value}
                     onSelect={onChange}
+                    wrap
                     error={errors.unit_type?.message}
                   />
                 )}
               />
+            )}
 
-              {/* Units completed */}
-              <Controller
-                control={control}
-                name="units_completed"
-                render={({ field: { onChange, value } }) => (
-                  <Input
-                    label="Unidades completadas"
-                    placeholder="0.00"
-                    value={value}
-                    // Android numeric keyboards emit a comma as the decimal
-                    // separator under es-MX; the column only accepts a dot.
-                    onChangeText={(text) => onChange(text.replace(",", "."))}
-                    keyboardType="decimal-pad"
-                    error={errors.units_completed?.message}
-                    icon={
-                      <Ionicons name="resize-outline" size={20} color="#9CA3AF" />
-                    }
-                  />
-                )}
-              />
-
-              {/* Line segment */}
-              <Controller
-                control={control}
-                name="line_segment_id"
-                render={({ field: { onChange, value } }) => (
-                  <ChipSelect
-                    label="Tramo (opcional)"
-                    options={segmentOptions}
-                    selected={value}
-                    onSelect={onChange}
-                    error={errors.line_segment_id?.message}
-                  />
-                )}
-              />
-
-              {/* Crew members */}
-              {crewId !== "" && (
-                <ChipSelect
-                  label={`Integrantes del turno (${memberIds.length})`}
-                  options={memberOptions}
-                  selected={memberIds}
-                  onSelect={toggleMember}
-                  wrap
-                  emptyLabel="Esta cuadrilla no tiene integrantes por defecto"
+            {/* Units completed */}
+            <Controller
+              control={control}
+              name="units_completed"
+              render={({ field: { onChange, value } }) => (
+                <Input
+                  label={`Unidades completadas (${UNIT_SUFFIX[effectiveUnit]})`}
+                  placeholder="0.00"
+                  value={value}
+                  // Android numeric keyboards emit a comma as the decimal
+                  // separator under es-MX; the column only accepts a dot.
+                  onChangeText={(text) => onChange(text.replace(",", "."))}
+                  keyboardType="decimal-pad"
+                  error={errors.units_completed?.message}
+                  icon={
+                    <Ionicons name="resize-outline" size={20} color="#9CA3AF" />
+                  }
                 />
               )}
+            />
 
-              {/* Notes */}
+            {/* Overproduction reason */}
+            {showReason && (
               <Controller
                 control={control}
-                name="notes"
+                name="overproduction_reason"
                 render={({ field: { onChange, value } }) => (
-                  <Input
-                    label="Notas (opcional)"
-                    placeholder="Condiciones, incidencias, equipo usado..."
-                    value={value}
-                    onChangeText={onChange}
-                    multiline
-                    numberOfLines={3}
-                    className="min-h-16"
-                    style={{ textAlignVertical: "top" }}
-                    error={errors.notes?.message}
-                  />
+                  <View className="gap-2">
+                    <View className="flex-row items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                      <Ionicons
+                        name="alert-circle-outline"
+                        size={18}
+                        color="#b45309"
+                      />
+                      <Text className="flex-1 text-sm text-amber-800">
+                        {selectedActivity
+                          ? `Esto pasa de lo planeado en la actividad (quedaban ${formatQty(selectedActivity.remaining)} ${UNIT_SUFFIX[selectedActivity.unit_type]}). Hace falta un motivo.`
+                          : "Esto pasa de lo planeado en la actividad. Hace falta un motivo."}
+                      </Text>
+                    </View>
+                    <Input
+                      label="Motivo de la sobre-producción"
+                      placeholder="Se extendió el bore por una interferencia..."
+                      value={value}
+                      onChangeText={onChange}
+                      multiline
+                      numberOfLines={2}
+                      className="min-h-16"
+                      style={{ textAlignVertical: "top" }}
+                      error={errors.overproduction_reason?.message}
+                    />
+                  </View>
                 )}
               />
+            )}
 
-              {duplicateEntry && (
-                <View className="flex-row items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
-                  <Ionicons name="warning-outline" size={18} color="#b45309" />
-                  <Text className="flex-1 text-sm text-amber-800">
-                    Esta cuadrilla ya tiene {duplicateEntry.units_completed} ft
-                    reportados para {duplicateEntry.work_date}. Verifica antes
-                    de registrar otro turno.
-                  </Text>
-                </View>
-              )}
-
-              <Button
-                title="Registrar producción"
-                size="lg"
-                onPress={handleSubmit(onSubmit, onInvalid)}
-                loading={isSubmitting || createEntry.isPending}
-                disabled={isSubmitting || createEntry.isPending}
-                icon={<Ionicons name="checkmark-circle" size={20} color="white" />}
+            {/* Crew members */}
+            {crewId !== "" && (
+              <ChipSelect
+                label={`Integrantes del turno (${memberIds.length})`}
+                options={memberOptions}
+                selected={memberIds}
+                onSelect={toggleMember}
+                wrap
+                emptyLabel="Esta cuadrilla no tiene integrantes por defecto"
               />
+            )}
 
-              <Text className="text-xs text-gray-400 text-center">
-                Se registra como Reportado y pasa a aprobación del supervisor.
-              </Text>
-            </CardContent>
-          </Card>
-        )}
+            {/* Notes */}
+            <Controller
+              control={control}
+              name="notes"
+              render={({ field: { onChange, value } }) => (
+                <Input
+                  label="Notas (opcional)"
+                  placeholder="Condiciones, incidencias, equipo usado..."
+                  value={value}
+                  onChangeText={onChange}
+                  multiline
+                  numberOfLines={3}
+                  className="min-h-16"
+                  style={{ textAlignVertical: "top" }}
+                  error={errors.notes?.message}
+                />
+              )}
+            />
+
+            {duplicateEntry && (
+              <View className="flex-row items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
+                <Ionicons name="warning-outline" size={18} color="#b45309" />
+                <Text className="flex-1 text-sm text-amber-800">
+                  Esta cuadrilla ya tiene{" "}
+                  {formatQty(Number(duplicateEntry.units_completed))}{" "}
+                  {UNIT_SUFFIX[duplicateEntry.unit_type] ?? ""} reportados para{" "}
+                  {duplicateEntry.work_date}. Verifica antes de registrar otro
+                  turno.
+                </Text>
+              </View>
+            )}
+
+            <Button
+              title="Registrar producción"
+              size="lg"
+              onPress={handleSubmit(onSubmit, onInvalid)}
+              loading={isSubmitting || createEntry.isPending}
+              disabled={isSubmitting || createEntry.isPending}
+              icon={
+                <Ionicons name="checkmark-circle" size={20} color="white" />
+              }
+            />
+
+            <Text className="text-xs text-gray-400 text-center">
+              Se registra como Reportado y pasa a aprobación del supervisor.
+            </Text>
+          </CardContent>
+        </Card>
 
         {/* Recent entries */}
         <View className="gap-3">
@@ -536,18 +798,28 @@ export default function ProductionEntryScreen() {
               label: entry.internal_status,
               variant: "default" as const,
             };
+            const activity = entry.budget_line_id
+              ? budgetLineLabel(lineLabels?.[entry.budget_line_id])
+              : null;
             return (
               <Card key={entry.id}>
                 <CardContent className="gap-1.5">
                   <View className="flex-row items-start justify-between gap-3">
                     <View className="flex-1">
                       <Text className="font-semibold text-gray-900">
-                        {entry.units_completed} ft ·{" "}
+                        {formatQty(Number(entry.units_completed))}{" "}
+                        {UNIT_SUFFIX[entry.unit_type] ?? ""} ·{" "}
                         {UNIT_TYPE_SHORT[entry.unit_type] ?? entry.unit_type}
                       </Text>
                       <Text className="text-xs text-gray-500 mt-0.5">
-                        {entry.work_date} · {entry.crew?.name ?? "Sin cuadrilla"}
+                        {entry.work_date} ·{" "}
+                        {entry.crew?.name ?? "Sin cuadrilla"}
                       </Text>
+                      {activity && (
+                        <Text className="text-xs text-primary-700 mt-0.5">
+                          {activity}
+                        </Text>
+                      )}
                     </View>
                     <Badge label={badge.label} variant={badge.variant} />
                   </View>
@@ -560,6 +832,11 @@ export default function ProductionEntryScreen() {
                         Motivo: {entry.rejection_reason}
                       </Text>
                     )}
+                  {entry.overproduction_reason && (
+                    <Text className="text-xs text-amber-700">
+                      Sobre-producción: {entry.overproduction_reason}
+                    </Text>
+                  )}
                   {entry.notes && (
                     <Text className="text-sm text-gray-600">{entry.notes}</Text>
                   )}
@@ -581,9 +858,9 @@ function getErrorMessage(error: unknown): string {
     msg.includes("violates row-level") ||
     msg.includes("permission denied")
   ) {
-    return "Tu usuario no tiene permiso para registrar producción en este proyecto.";
+    return "Tu usuario no tiene permiso para reportar producción de esta cuadrilla.";
   }
-  if (msg.includes("no hay sesión activa")) {
+  if (msg.includes("not authenticated") || msg.includes("no hay sesión")) {
     return "Tu sesión expiró. Vuelve a iniciar sesión.";
   }
   if (msg.includes("network") || msg.includes("fetch")) {

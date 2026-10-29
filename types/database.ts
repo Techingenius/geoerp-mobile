@@ -19,6 +19,12 @@ export type { Database, Json };
 export type Tables<T extends keyof Database["public"]["Tables"]> =
   Database["public"]["Tables"][T]["Row"];
 
+/** A row of whatever a database function returns. */
+export type RpcRow<T extends keyof Database["public"]["Functions"]> =
+  Database["public"]["Functions"][T]["Returns"] extends readonly (infer Row)[]
+    ? Row
+    : never;
+
 // ---------------------------------------------------------------------------
 // GeoJSON geometry types (PostGIS columns come as `unknown` in generated types)
 // ---------------------------------------------------------------------------
@@ -98,7 +104,14 @@ export interface PreExistingDamage
 // workflow lives in the web app (apps/web/src/hooks/use-production.ts); mobile
 // only creates entries at the first tier (`reported`).
 // ---------------------------------------------------------------------------
-export type UnitType = "drilling_ft" | "aerial_ft" | "duct_ft" | "trenching_ft";
+// `unit` arrived with GRA-825: a budget line can bill per piece (handholds,
+// pedestals) and not only by the foot.
+export type UnitType =
+  | "drilling_ft"
+  | "aerial_ft"
+  | "duct_ft"
+  | "trenching_ft"
+  | "unit";
 
 export type ProductionInternalStatus =
   | "reported"
@@ -126,3 +139,23 @@ export interface ProductionEntry
 }
 
 export type Crew = Tables<"crews">;
+
+// ---------------------------------------------------------------------------
+// Segments planned as activities (GRA-831)
+// A segment carries one row per billable activity (a budget line / Wave
+// product) with its planned quantity; production is measured against it.
+// ---------------------------------------------------------------------------
+
+/** `line_segments.state` as computed by `get_segment_progress`. */
+export type SegmentState =
+  | "unassigned"
+  | "assigned"
+  | "in_progress"
+  | "complete"
+  | "approved";
+
+/** One row of `get_segment_progress`: a segment x activity pair. */
+export type SegmentProgressRow = RpcRow<"get_segment_progress">;
+
+/** One row of `project_budget_line_labels`: a budget line without its rate. */
+export type BudgetLineLabel = RpcRow<"project_budget_line_labels">;

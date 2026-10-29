@@ -349,6 +349,99 @@ export type Database = {
           },
         ]
       }
+      bank_transactions: {
+        Row: {
+          account_name: string
+          account_ref: string | null
+          alias_external_ids: string[]
+          amount: number
+          category: string | null
+          category_wave_account_id: string | null
+          created_at: string
+          description: string
+          direction: string
+          external_id: string
+          id: string
+          imported_at: string
+          imported_by: string | null
+          is_internal_transfer: boolean
+          organization_id: string
+          removed_in_wave_at: string | null
+          payroll_review_since: string | null
+          review_amount: number | null
+          review_direction: string | null
+          review_reason: string | null
+          source: string
+          transaction_date: string
+          updated_at: string
+        }
+        Insert: {
+          account_name: string
+          account_ref?: string | null
+          alias_external_ids?: string[]
+          amount: number
+          category?: string | null
+          category_wave_account_id?: string | null
+          created_at?: string
+          description?: string
+          direction: string
+          external_id: string
+          id?: string
+          imported_at?: string
+          imported_by?: string | null
+          is_internal_transfer?: boolean
+          organization_id: string
+          removed_in_wave_at?: string | null
+          payroll_review_since?: string | null
+          review_amount?: number | null
+          review_direction?: string | null
+          review_reason?: string | null
+          source: string
+          transaction_date: string
+          updated_at?: string
+        }
+        Update: {
+          account_name?: string
+          account_ref?: string | null
+          alias_external_ids?: string[]
+          amount?: number
+          category?: string | null
+          category_wave_account_id?: string | null
+          created_at?: string
+          description?: string
+          direction?: string
+          external_id?: string
+          id?: string
+          imported_at?: string
+          imported_by?: string | null
+          is_internal_transfer?: boolean
+          organization_id?: string
+          removed_in_wave_at?: string | null
+          payroll_review_since?: string | null
+          review_amount?: number | null
+          review_direction?: string | null
+          review_reason?: string | null
+          source?: string
+          transaction_date?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bank_transactions_category_wave_account_fk"
+            columns: ["organization_id", "category_wave_account_id"]
+            isOneToOne: false
+            referencedRelation: "wave_accounts"
+            referencedColumns: ["organization_id", "wave_account_id"]
+          },
+          {
+            foreignKeyName: "bank_transactions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       client_contacts: {
         Row: {
           client_id: string
@@ -536,6 +629,7 @@ export type Database = {
         Row: {
           created_at: string | null
           id: string
+          payroll_period_id: string | null
           production_entry_id: string
           rate_applied: number | null
           user_id: string
@@ -543,6 +637,7 @@ export type Database = {
         Insert: {
           created_at?: string | null
           id?: string
+          payroll_period_id?: string | null
           production_entry_id: string
           rate_applied?: number | null
           user_id: string
@@ -550,11 +645,19 @@ export type Database = {
         Update: {
           created_at?: string | null
           id?: string
+          payroll_period_id?: string | null
           production_entry_id?: string
           rate_applied?: number | null
           user_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "crew_members_payroll_period_id_fkey"
+            columns: ["payroll_period_id"]
+            isOneToOne: false
+            referencedRelation: "payroll_periods"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "crew_members_production_entry_id_fkey"
             columns: ["production_entry_id"]
@@ -1022,15 +1125,73 @@ export type Database = {
           },
         ]
       }
+      line_segment_activities: {
+        Row: {
+          budget_line_id: string
+          created_at: string
+          created_by: string | null
+          id: string
+          line_segment_id: string
+          planned_qty: number
+          updated_at: string
+        }
+        Insert: {
+          budget_line_id: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          line_segment_id: string
+          planned_qty?: number
+          updated_at?: string
+        }
+        Update: {
+          budget_line_id?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          line_segment_id?: string
+          planned_qty?: number
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "line_segment_activities_budget_line_id_fkey"
+            columns: ["budget_line_id"]
+            isOneToOne: false
+            referencedRelation: "project_budgets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "line_segment_activities_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "line_segment_activities_line_segment_id_fkey"
+            columns: ["line_segment_id"]
+            isOneToOne: false
+            referencedRelation: "line_segments"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       line_segments: {
         Row: {
+          assigned_at: string | null
+          assigned_by: string | null
+          assigned_crew_id: string | null
           auto_generated: boolean
           created_at: string | null
           created_by: string | null
           description: string | null
           geometry: unknown
           id: string
+          length_ft: number | null
+          length_m: number | null
           name: string
+          planned_date: string | null
           project_id: string | null
           properties: Json | null
           source_service_a_id: string | null
@@ -1039,13 +1200,19 @@ export type Database = {
           updated_at: string | null
         }
         Insert: {
+          assigned_at?: string | null
+          assigned_by?: string | null
+          assigned_crew_id?: string | null
           auto_generated?: boolean
           created_at?: string | null
           created_by?: string | null
           description?: string | null
           geometry: unknown
           id?: string
+          length_ft?: never
+          length_m?: never
           name: string
+          planned_date?: string | null
           project_id?: string | null
           properties?: Json | null
           source_service_a_id?: string | null
@@ -1054,13 +1221,19 @@ export type Database = {
           updated_at?: string | null
         }
         Update: {
+          assigned_at?: string | null
+          assigned_by?: string | null
+          assigned_crew_id?: string | null
           auto_generated?: boolean
           created_at?: string | null
           created_by?: string | null
           description?: string | null
           geometry?: unknown
           id?: string
+          length_ft?: never
+          length_m?: never
           name?: string
+          planned_date?: string | null
           project_id?: string | null
           properties?: Json | null
           source_service_a_id?: string | null
@@ -1069,6 +1242,20 @@ export type Database = {
           updated_at?: string | null
         }
         Relationships: [
+          {
+            foreignKeyName: "line_segments_assigned_by_fkey"
+            columns: ["assigned_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "line_segments_assigned_crew_id_fkey"
+            columns: ["assigned_crew_id"]
+            isOneToOne: false
+            referencedRelation: "crews"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "line_segments_created_by_fkey"
             columns: ["created_by"]
@@ -1095,6 +1282,57 @@ export type Database = {
             columns: ["source_service_b_id"]
             isOneToOne: false
             referencedRelation: "services"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      map_guides: {
+        Row: {
+          color: string | null
+          created_at: string | null
+          created_by: string | null
+          geometry: unknown
+          id: string
+          metadata: Json | null
+          name: string | null
+          project_id: string
+          updated_at: string | null
+        }
+        Insert: {
+          color?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          geometry: unknown
+          id?: string
+          metadata?: Json | null
+          name?: string | null
+          project_id: string
+          updated_at?: string | null
+        }
+        Update: {
+          color?: string | null
+          created_at?: string | null
+          created_by?: string | null
+          geometry?: unknown
+          id?: string
+          metadata?: Json | null
+          name?: string | null
+          project_id?: string
+          updated_at?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "map_guides_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "map_guides_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
             referencedColumns: ["id"]
           },
         ]
@@ -1551,6 +1789,7 @@ export type Database = {
           organization_id: string
           paid_at: string | null
           paid_by: string | null
+          payroll_period_id: string | null
           reason: string | null
           rejected_at: string | null
           rejected_by: string | null
@@ -1573,6 +1812,7 @@ export type Database = {
           organization_id: string
           paid_at?: string | null
           paid_by?: string | null
+          payroll_period_id?: string | null
           reason?: string | null
           rejected_at?: string | null
           rejected_by?: string | null
@@ -1595,6 +1835,7 @@ export type Database = {
           organization_id?: string
           paid_at?: string | null
           paid_by?: string | null
+          payroll_period_id?: string | null
           reason?: string | null
           rejected_at?: string | null
           rejected_by?: string | null
@@ -1605,6 +1846,13 @@ export type Database = {
           worker_id?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "payroll_advances_payroll_period_id_fkey"
+            columns: ["payroll_period_id"]
+            isOneToOne: false
+            referencedRelation: "payroll_periods"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "payroll_advances_approved_by_fkey"
             columns: ["approved_by"]
@@ -1645,6 +1893,217 @@ export type Database = {
             columns: ["worker_id"]
             isOneToOne: false
             referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      payroll_period_settings: {
+        Row: {
+          anchor_date: string | null
+          created_at: string
+          created_by: string | null
+          effective_from: string
+          id: string
+          organization_id: string
+          payment_lag_days: number
+          period_type: string
+          updated_at: string
+        }
+        Insert: {
+          anchor_date?: string | null
+          created_at?: string
+          created_by?: string | null
+          effective_from: string
+          id?: string
+          organization_id: string
+          payment_lag_days?: number
+          period_type: string
+          updated_at?: string
+        }
+        Update: {
+          anchor_date?: string | null
+          created_at?: string
+          created_by?: string | null
+          effective_from?: string
+          id?: string
+          organization_id?: string
+          payment_lag_days?: number
+          period_type?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payroll_period_settings_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_period_settings_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      payroll_period_workers: {
+        Row: {
+          advances_deducted: number
+          created_at: string
+          gross: number
+          hourly_pay: number
+          id: string
+          marked_paid_at: string | null
+          marked_paid_by: string | null
+          net: number
+          organization_id: string
+          paid_on: string | null
+          period_id: string
+          production_pay: number
+          retention_deducted: number
+          worker_id: string
+          worker_retention_id: string | null
+          zelle_contact: string | null
+          zelle_reference: string | null
+        }
+        Insert: {
+          advances_deducted?: number
+          created_at?: string
+          gross?: number
+          hourly_pay?: number
+          id?: string
+          marked_paid_at?: string | null
+          marked_paid_by?: string | null
+          net?: number
+          organization_id: string
+          paid_on?: string | null
+          period_id: string
+          production_pay?: number
+          retention_deducted?: number
+          worker_id: string
+          worker_retention_id?: string | null
+          zelle_contact?: string | null
+          zelle_reference?: string | null
+        }
+        Update: {
+          advances_deducted?: number
+          created_at?: string
+          gross?: number
+          hourly_pay?: number
+          id?: string
+          marked_paid_at?: string | null
+          marked_paid_by?: string | null
+          net?: number
+          organization_id?: string
+          paid_on?: string | null
+          period_id?: string
+          production_pay?: number
+          retention_deducted?: number
+          worker_id?: string
+          worker_retention_id?: string | null
+          zelle_contact?: string | null
+          zelle_reference?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payroll_period_workers_marked_paid_by_fkey"
+            columns: ["marked_paid_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_period_workers_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_period_workers_period_id_fkey"
+            columns: ["period_id"]
+            isOneToOne: false
+            referencedRelation: "payroll_periods"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_period_workers_worker_id_fkey"
+            columns: ["worker_id"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_period_workers_worker_retention_id_fkey"
+            columns: ["worker_retention_id"]
+            isOneToOne: false
+            referencedRelation: "worker_retentions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      payroll_periods: {
+        Row: {
+          closed_at: string | null
+          closed_by: string | null
+          created_at: string
+          created_by: string | null
+          id: string
+          organization_id: string
+          paid_at: string | null
+          period_end: string
+          period_start: string
+          status: string
+          updated_at: string
+        }
+        Insert: {
+          closed_at?: string | null
+          closed_by?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id: string
+          paid_at?: string | null
+          period_end: string
+          period_start: string
+          status?: string
+          updated_at?: string
+        }
+        Update: {
+          closed_at?: string | null
+          closed_by?: string | null
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id?: string
+          paid_at?: string | null
+          period_end?: string
+          period_start?: string
+          status?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payroll_periods_closed_by_fkey"
+            columns: ["closed_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_periods_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_periods_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
             referencedColumns: ["id"]
           },
         ]
@@ -1774,7 +2233,9 @@ export type Database = {
         Row: {
           admin_approved_at: string | null
           admin_approved_by: string | null
+          billed_unit_price: number | null
           billing_status: string
+          budget_line_id: string | null
           client_approval_notes: string | null
           client_approved: boolean
           client_approved_at: string | null
@@ -1787,6 +2248,7 @@ export type Database = {
           invoiced_at: string | null
           line_segment_id: string | null
           notes: string | null
+          overproduction_reason: string | null
           paid_at: string | null
           project_id: string
           rejected_at: string | null
@@ -1803,7 +2265,9 @@ export type Database = {
         Insert: {
           admin_approved_at?: string | null
           admin_approved_by?: string | null
+          billed_unit_price?: number | null
           billing_status?: string
+          budget_line_id?: string | null
           client_approval_notes?: string | null
           client_approved?: boolean
           client_approved_at?: string | null
@@ -1816,6 +2280,7 @@ export type Database = {
           invoiced_at?: string | null
           line_segment_id?: string | null
           notes?: string | null
+          overproduction_reason?: string | null
           paid_at?: string | null
           project_id: string
           rejected_at?: string | null
@@ -1832,7 +2297,9 @@ export type Database = {
         Update: {
           admin_approved_at?: string | null
           admin_approved_by?: string | null
+          billed_unit_price?: number | null
           billing_status?: string
+          budget_line_id?: string | null
           client_approval_notes?: string | null
           client_approved?: boolean
           client_approved_at?: string | null
@@ -1845,6 +2312,7 @@ export type Database = {
           invoiced_at?: string | null
           line_segment_id?: string | null
           notes?: string | null
+          overproduction_reason?: string | null
           paid_at?: string | null
           project_id?: string
           rejected_at?: string | null
@@ -1859,6 +2327,13 @@ export type Database = {
           work_date?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "production_entries_budget_line_id_fkey"
+            columns: ["budget_line_id"]
+            isOneToOne: false
+            referencedRelation: "project_budgets"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "production_entries_admin_approved_by_fkey"
             columns: ["admin_approved_by"]
@@ -1920,45 +2395,51 @@ export type Database = {
       project_budgets: {
         Row: {
           budget_amount: number | null
-          client_rate_per_unit: number
+          client_rate_per_unit: number | null
           created_at: string | null
           created_by: string | null
           default_worker_rate_per_unit: number | null
           id: string
+          is_active: boolean
           name: string
           notes: string | null
           project_id: string
-          total_units: number
+          total_units: number | null
           unit_type: string
           updated_at: string | null
+          wave_product_id: string | null
         }
         Insert: {
           budget_amount?: number | null
-          client_rate_per_unit: number
+          client_rate_per_unit: number | null
           created_at?: string | null
           created_by?: string | null
           default_worker_rate_per_unit?: number | null
           id?: string
+          is_active?: boolean
           name?: string
           notes?: string | null
           project_id: string
-          total_units: number
+          total_units?: number | null
           unit_type?: string
           updated_at?: string | null
+          wave_product_id?: string | null
         }
         Update: {
           budget_amount?: number | null
-          client_rate_per_unit?: number
+          client_rate_per_unit?: number | null
           created_at?: string | null
           created_by?: string | null
           default_worker_rate_per_unit?: number | null
           id?: string
+          is_active?: boolean
           name?: string
           notes?: string | null
           project_id?: string
-          total_units?: number
+          total_units?: number | null
           unit_type?: string
           updated_at?: string | null
+          wave_product_id?: string | null
         }
         Relationships: [
           {
@@ -1973,6 +2454,13 @@ export type Database = {
             columns: ["project_id"]
             isOneToOne: false
             referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "project_budgets_wave_product_id_fkey"
+            columns: ["wave_product_id"]
+            isOneToOne: false
+            referencedRelation: "wave_products"
             referencedColumns: ["id"]
           },
         ]
@@ -2900,6 +3388,7 @@ export type Database = {
           hours_worked: number | null
           id: string
           notes: string | null
+          payroll_period_id: string | null
           project_id: string
           rejection_reason: string | null
           status: string
@@ -2921,6 +3410,7 @@ export type Database = {
           hours_worked?: number | null
           id?: string
           notes?: string | null
+          payroll_period_id?: string | null
           project_id: string
           rejection_reason?: string | null
           status?: string
@@ -2942,6 +3432,7 @@ export type Database = {
           hours_worked?: number | null
           id?: string
           notes?: string | null
+          payroll_period_id?: string | null
           project_id?: string
           rejection_reason?: string | null
           status?: string
@@ -2950,6 +3441,13 @@ export type Database = {
           work_date?: string
         }
         Relationships: [
+          {
+            foreignKeyName: "time_entries_payroll_period_id_fkey"
+            columns: ["payroll_period_id"]
+            isOneToOne: false
+            referencedRelation: "payroll_periods"
+            referencedColumns: ["id"]
+          },
           {
             foreignKeyName: "time_entries_approved_by_fkey"
             columns: ["approved_by"]
@@ -2976,6 +3474,74 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      transaction_allocations: {
+        Row: {
+          allocated_at: string
+          allocated_by: string | null
+          amount: number
+          id: string
+          is_overhead: boolean
+          is_payroll: boolean
+          note: string | null
+          organization_id: string
+          project_id: string | null
+          transaction_id: string
+        }
+        Insert: {
+          allocated_at?: string
+          allocated_by?: string | null
+          amount: number
+          id?: string
+          is_overhead?: boolean
+          is_payroll?: boolean
+          note?: string | null
+          organization_id: string
+          project_id?: string | null
+          transaction_id: string
+        }
+        Update: {
+          allocated_at?: string
+          allocated_by?: string | null
+          amount?: number
+          id?: string
+          is_overhead?: boolean
+          is_payroll?: boolean
+          note?: string | null
+          organization_id?: string
+          project_id?: string | null
+          transaction_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "transaction_allocations_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transaction_allocations_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transaction_allocations_transaction_id_fkey"
+            columns: ["transaction_id"]
+            isOneToOne: false
+            referencedRelation: "bank_transactions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "transaction_allocations_transaction_id_fkey"
+            columns: ["transaction_id"]
+            isOneToOne: false
+            referencedRelation: "bank_transactions_ledger"
             referencedColumns: ["id"]
           },
         ]
@@ -3047,6 +3613,115 @@ export type Database = {
             columns: ["user_id"]
             isOneToOne: false
             referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wave_accounts: {
+        Row: {
+          created_at: string
+          is_archived: boolean
+          is_payroll: boolean
+          is_removed: boolean
+          last_synced_at: string
+          name: string
+          organization_id: string
+          subtype: string | null
+          type: string | null
+          updated_at: string
+          wave_account_id: string
+        }
+        Insert: {
+          created_at?: string
+          is_archived?: boolean
+          is_payroll?: boolean
+          is_removed?: boolean
+          last_synced_at?: string
+          name: string
+          organization_id: string
+          subtype?: string | null
+          type?: string | null
+          updated_at?: string
+          wave_account_id: string
+        }
+        Update: {
+          created_at?: string
+          is_archived?: boolean
+          is_payroll?: boolean
+          is_removed?: boolean
+          last_synced_at?: string
+          name?: string
+          organization_id?: string
+          subtype?: string | null
+          type?: string | null
+          updated_at?: string
+          wave_account_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wave_accounts_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      wave_products: {
+        Row: {
+          code: string | null
+          created_at: string
+          description: string | null
+          id: string
+          income_account_id: string | null
+          is_archived: boolean
+          is_removed: boolean
+          last_synced_at: string
+          name: string
+          organization_id: string
+          unit_price: number
+          updated_at: string
+          wave_business_id: string | null
+          wave_product_id: string
+        }
+        Insert: {
+          code?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          income_account_id?: string | null
+          is_archived?: boolean
+          is_removed?: boolean
+          last_synced_at?: string
+          name: string
+          organization_id: string
+          unit_price?: number
+          updated_at?: string
+          wave_business_id?: string | null
+          wave_product_id: string
+        }
+        Update: {
+          code?: string | null
+          created_at?: string
+          description?: string | null
+          id?: string
+          income_account_id?: string | null
+          is_archived?: boolean
+          is_removed?: boolean
+          last_synced_at?: string
+          name?: string
+          organization_id?: string
+          unit_price?: number
+          updated_at?: string
+          wave_business_id?: string | null
+          wave_product_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "wave_products_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
             referencedColumns: ["id"]
           },
         ]
@@ -3220,13 +3895,100 @@ export type Database = {
       }
     }
     Views: {
-      [_ in never]: never
+      bank_transactions_ledger: {
+        Row: {
+          account_name: string | null
+          account_ref: string | null
+          allocated_amount: number | null
+          allocation_status: string | null
+          allocations: Json | null
+          amount: number | null
+          category: string | null
+          category_is_payroll: boolean | null
+          category_wave_account_id: string | null
+          category_wave_name: string | null
+          description: string | null
+          direction: string | null
+          external_id: string | null
+          id: string | null
+          imported_at: string | null
+          is_internal_transfer: boolean | null
+          organization_id: string | null
+          overhead_amount: number | null
+          removed_in_wave_at: string | null
+          payroll_review_since: string | null
+          review_amount: number | null
+          review_direction: string | null
+          review_reason: string | null
+          source: string | null
+          transaction_date: string | null
+          unallocated_amount: number | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "bank_transactions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      budget_lines_without_wave_product: {
+        Row: {
+          budget_line_id: string | null
+          is_active: boolean | null
+          legacy_rate: number | null
+          line_name: string | null
+          organization_id: string | null
+          project_id: string | null
+          project_name: string | null
+          unit_type: string | null
+        }
+        Relationships: []
+      }
     }
     Functions: {
+      close_payroll_period: { Args: { p_period_id: string }; Returns: Json }
       create_default_roles: { Args: { org_id: string }; Returns: undefined }
+      accept_wave_amounts: {
+        Args: { p_transaction_ids: string[] }
+        Returns: Json
+      }
+      allocate_transactions_in_full: {
+        Args: {
+          p_note?: string
+          p_project_id?: string
+          p_transaction_ids: string[]
+        }
+        Returns: Json
+      }
       create_default_task_types: {
         Args: { org_id: string }
         Returns: undefined
+      }
+      assign_line_segments: {
+        Args: {
+          p_crew_id: string | null
+          p_planned_date: string | null
+          p_segment_ids: string[]
+        }
+        Returns: number
+      }
+      create_production_entry: {
+        Args: {
+          p_crew_id: string
+          p_budget_line_id?: string
+          p_crew_member_ids: string[]
+          p_line_segment_id?: string
+          p_notes?: string
+          p_overproduction_reason?: string
+          p_project_id: string
+          p_unit_type: string | null
+          p_units_completed: number
+          p_work_date: string
+        }
+        Returns: Database["public"]["Tables"]["production_entries"]["Row"]
       }
       current_user_org: { Args: never; Returns: string }
       generate_maintenance_alerts: {
@@ -3237,6 +3999,28 @@ export type Database = {
           woken_count: number
         }[]
       }
+      get_ar_aging: {
+        Args: { p_as_of?: string; p_org_id: string }
+        Returns: Json
+      }
+      get_cash_flow_projection: {
+        Args: { p_org_id: string; p_scenario?: string; p_weeks?: number }
+        Returns: Json
+      }
+      get_cash_position: {
+        Args: { p_as_of?: string; p_org_id: string }
+        Returns: Json
+      }
+      get_collection_rate: {
+        Args: { p_org_id: string; p_period_end: string; p_period_start: string }
+        Returns: Json
+      }
+      get_dso: { Args: { p_months?: number; p_org_id: string }; Returns: Json }
+      get_expense_summary: {
+        Args: { p_org_id: string; p_period_end: string; p_period_start: string }
+        Returns: Json
+      }
+      get_financial_alerts: { Args: { p_org_id: string }; Returns: Json }
       get_fleet_maintenance_summary: {
         Args: never
         Returns: {
@@ -3248,6 +4032,7 @@ export type Database = {
           total_assets: number
         }[]
       }
+      get_liquidity_ratios: { Args: { p_org_id: string }; Returns: Json }
       get_org_users: {
         Args: never
         Returns: {
@@ -3261,6 +4046,63 @@ export type Database = {
           phone: string
           roles: Json
           updated_at: string
+        }[]
+      }
+      get_payroll_period: { Args: { p_period_id: string }; Returns: Json }
+      get_payroll_period_reconciliation: {
+        Args: { p_period_id: string }
+        Returns: Json
+      }
+      get_payroll_period_settings: { Args: never; Returns: Json }
+      get_payroll_summary: {
+        Args: {
+          p_org_id: string
+          p_period_end: string
+          p_period_start: string
+          p_project_id?: string
+        }
+        Returns: Json
+      }
+      get_project_pnl: {
+        Args: { p_org_id: string; p_project_id?: string }
+        Returns: Json
+      }
+      get_project_progress: {
+        Args: { p_project_id: string }
+        Returns: {
+          approved_units: number
+          budget_line_id: string | null
+          is_active: boolean | null
+          line_name: string | null
+          pct_approved: number | null
+          planned_qty: number | null
+          reported_units: number
+          unit_type: string | null
+          wave_product_code: string | null
+        }[]
+      }
+      get_revenue_summary: {
+        Args: { p_org_id: string; p_period_end: string; p_period_start: string }
+        Returns: Json
+      }
+      get_segment_progress: {
+        Args: { p_crew_id?: string; p_project_id: string }
+        Returns: {
+          activity_id: string | null
+          approved_units: number | null
+          assigned_crew_id: string | null
+          budget_line_id: string | null
+          length_ft: number | null
+          line_name: string | null
+          line_segment_id: string
+          pct_approved: number | null
+          planned_date: string | null
+          planned_qty: number | null
+          reported_units: number | null
+          segment_name: string
+          state: "unassigned" | "assigned" | "in_progress" | "complete" | "approved"
+          unit_type: string | null
+          wave_product_code: string | null
         }[]
       }
       get_status_workflow: {
@@ -3278,9 +4120,76 @@ export type Database = {
       }
       get_task_org_id: { Args: { p_task_id: string }; Returns: string }
       has_role: { Args: { role_name: string }; Returns: boolean }
+      import_bank_transactions: {
+        Args: { p_dry_run?: boolean; p_rows: Json; p_source: string }
+        Returns: Json
+      }
+      lookup_worker_hourly_rate: {
+        Args: { p_project_id: string; p_user_id: string; p_work_date: string }
+        Returns: number
+      }
       maintenance_alert_severity: {
         Args: { p_due_date: string }
         Returns: string
+      }
+      mark_payroll_worker_paid: {
+        Args: {
+          p_paid_on: string
+          p_period_id: string
+          p_worker_id: string
+          p_zelle_reference: string
+        }
+        Returns: Json
+      }
+      open_payroll_period: { Args: { p_date: string }; Returns: string }
+      payroll_period_bounds: {
+        Args: { p_date: string; p_org: string }
+        Returns: Record<string, unknown>
+      }
+      payroll_period_bounds_for: {
+        Args: {
+          p_anchor_date?: string
+          p_ceiling?: string
+          p_date: string
+          p_floor?: string
+          p_period_type: string
+        }
+        Returns: Record<string, unknown>
+      }
+      payroll_period_config: {
+        Args: { p_date: string; p_org: string }
+        Returns: Record<string, unknown>
+      }
+      project_budget_line_labels: {
+        Args: { p_project_id: string }
+        Returns: {
+          budget_line_id: string
+          is_active: boolean
+          line_name: string | null
+          unit_type: string
+          wave_product_code: string | null
+          wave_product_name: string | null
+        }[]
+      }
+      reconcile_wave_export: {
+        Args: { p_dry_run?: boolean; p_external_ids: string[] }
+        Returns: Json
+      }
+      set_payroll_period_settings: {
+        Args: {
+          p_anchor_date?: string
+          p_payment_lag_days?: number
+          p_period_type: string
+        }
+        Returns: Json
+      }
+      set_transaction_allocations: {
+        Args: { p_allocations: Json; p_transaction_id: string }
+        Returns: undefined
+      }
+      set_transactions_internal_transfer: {
+        Args: { p_is_internal?: boolean; p_transaction_ids: string[] }
+        Returns: Json
       }
       supersede_worker_rate: {
         Args: {
