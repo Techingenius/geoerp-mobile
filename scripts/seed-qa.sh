@@ -3,6 +3,7 @@
 # seed-qa.sh — Mobile QA fixtures in the GeoERP database. Idempotent.
 #
 #   ./scripts/seed-qa.sh                  # seed the local geoerp stack
+#   ./scripts/seed-qa.sh --teardown       # remove the whole QA dataset
 #   ./scripts/seed-qa.sh --help
 #
 # The mobile app has no database of its own: it reads the same Supabase
@@ -13,11 +14,19 @@
 # reproduce when a tester reports a bug. This script writes that set, and
 # writes it the same way every time.
 #
-# IDEMPOTENT BY CONSTRUCTION, not by cleanup. Every row has a hard-coded id,
-# every write is an upsert on that id, and nothing is ever deleted. Running it
-# twice in a row leaves the database in exactly the state one run leaves it in;
-# the verification block at the end asserts the row counts, so a run that
-# duplicated anything fails instead of reporting success.
+# IDEMPOTENT. Every row has a hard-coded id and every write is an upsert on
+# that id, so no run can duplicate a fixture. The verification block at the end
+# asserts the row counts through RLS, so a run that left the dataset in any
+# other shape fails instead of reporting success.
+#
+# THE QA PROJECT IS DISPOSABLE. A real QA session writes into it — creating a
+# service, reporting production, attaching photos — and those rows are not
+# fixtures, so the counts would never match again and every later run would
+# fail. That would put us back to deleting rows by hand, which is the thing
+# this script exists to remove. So each run first prunes the QA organization
+# back to the fixture set: anything in it that is not one of the ids below is
+# deleted, and it says how many rows it dropped. Nothing outside the QA
+# organization is ever touched.
 #
 # All QA ids start with 9. Demo ids from geoerp's own supabase/seed.sql start
 # with a/b/c/d/e/f, so a glance at an id says which dataset a row came from:
@@ -53,10 +62,13 @@ PRODUCTION_REF="vwyfkqjhawrycskuqbpw"       # GeoERP production — never a targ
 GEOERP_DIR="${GEOERP_DIR:-$MOBILE_ROOT/../geoerp}"
 QA_PASSWORD="${QA_PASSWORD:-QaMovil123!}"
 
-if [[ "${1:-}" == "--help" || "${1:-}" == "-h" ]]; then
-  sed -n '2,/^# ===/p' "$0" | sed 's/^# \{0,1\}//'
-  exit 0
-fi
+TEARDOWN=0
+case "${1:-}" in
+  --help|-h)   sed -n '2,/^# ===/p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+  --teardown)  TEARDOWN=1 ;;
+  "")          ;;
+  *)           echo "ERROR: unknown argument '$1'. Try --help." >&2; exit 1 ;;
+esac
 
 need() { command -v "$1" >/dev/null || { echo "ERROR: '$1' not found" >&2; exit 1; }; }
 need curl; need python3
@@ -152,6 +164,105 @@ QA_CREW="97000000-0000-0000-0000-000000000001"
 QA_OPERATOR_EMAIL="qa-operador@geoerp.local"
 QA_TRINCHERO_EMAIL="qa-trinchero@geoerp.local"
 
+FIXTURE_SERVICES="95000000-0000-0000-0000-000000000001,95000000-0000-0000-0000-000000000002,95000000-0000-0000-0000-000000000003,95000000-0000-0000-0000-000000000004,95000000-0000-0000-0000-000000000005,95000000-0000-0000-0000-000000000006"
+FIXTURE_SEGMENTS="${QA_SEGMENT_1},${QA_SEGMENT_2}"
+FIXTURE_DAMAGES="96000000-0000-0000-0000-000000000001"
+
+# ── 0. Prune the QA organization back to the fixture set ────────────────────
+# A QA session writes into this project: a created service, a reported
+# production entry, a photo. None of that is a fixture, so leaving it in place
+# would break the counts for good and send us back to deleting rows by hand.
+# Everything below is scoped to the QA organization's own projects — read from
+# the database, not assumed — so no query can reach the demo dataset even if a
+# fixture id were wrong.
+#
+# --teardown runs the same walk with the keep-filters empty, and then removes
+# the crew, projects, client, users and the organization itself.
+if [[ "$TEARDOWN" == 1 ]]; then
+  KEEP_SERVICES=""; KEEP_SEGMENTS=""; KEEP_DAMAGES=""; KEEP_PROJECTS=""
+  echo "Teardown — removing the QA dataset from $API_URL..."
+else
+  KEEP_SERVICES="&id=not.in.(${FIXTURE_SERVICES})"
+  KEEP_SEGMENTS="&id=not.in.(${FIXTURE_SEGMENTS})"
+  KEEP_DAMAGES="&id=not.in.(${FIXTURE_DAMAGES})"
+  KEEP_PROJECTS="&id=not.in.(${QA_PROJECT})"
+  echo "Pruning the QA organization back to the fixture set..."
+fi
+
+PRUNED=0
+prune() {  # label path
+  local out n
+  out="$(req DELETE "$2")"
+  n="$(printf '%s' "$out" | jget "print(len(d))")"
+  if [[ "$n" != "0" ]]; then
+    printf '  %-22s %s row(s) deleted\n' "$1" "$n"
+    PRUNED=$((PRUNED + n))
+  fi
+}
+
+id_list() {  # path with select=id → comma-separated ids, empty if none
+  local out
+  out="$(req GET "$1")"
+  printf '%s' "$out" | jget "print(','.join(r['id'] for r in d))"
+}
+
+QA_PROJECT_IDS="$(id_list "/rest/v1/projects?select=id&organization_id=eq.${QA_ORG}")"
+if [[ -n "$QA_PROJECT_IDS" ]]; then
+  # service_photos and damage_photos cascade when their parent goes, but a
+  # tester's photos hang off rows we keep, so they are deleted on their own.
+  QA_SERVICE_IDS="$(id_list "/rest/v1/services?select=id&project_id=in.(${QA_PROJECT_IDS})")"
+  [[ -z "$QA_SERVICE_IDS" ]] || prune service_photos "/rest/v1/service_photos?service_id=in.(${QA_SERVICE_IDS})"
+  # Deleting the entries cascades crew_members and production_entry_history,
+  # and it has to happen before the segments they point at.
+  prune production_entries "/rest/v1/production_entries?project_id=in.(${QA_PROJECT_IDS})"
+  QA_DAMAGE_IDS="$(id_list "/rest/v1/pre_existing_damages?select=id&project_id=in.(${QA_PROJECT_IDS})")"
+  [[ -z "$QA_DAMAGE_IDS" ]] || prune damage_photos "/rest/v1/damage_photos?damage_id=in.(${QA_DAMAGE_IDS})"
+  prune pre_existing_damages "/rest/v1/pre_existing_damages?project_id=in.(${QA_PROJECT_IDS})${KEEP_DAMAGES}"
+  prune services "/rest/v1/services?project_id=in.(${QA_PROJECT_IDS})${KEEP_SERVICES}"
+  prune line_segments "/rest/v1/line_segments?project_id=in.(${QA_PROJECT_IDS})${KEEP_SEGMENTS}"
+  # Same reason as the photos above, for the segments that survive: these are
+  # written from the web admin today and from mobile once GRA-829 lands.
+  QA_SEGMENT_IDS="$(id_list "/rest/v1/line_segments?select=id&project_id=in.(${QA_PROJECT_IDS})")"
+  if [[ -n "$QA_SEGMENT_IDS" ]]; then
+    prune segment_photos "/rest/v1/segment_photos?segment_id=in.(${QA_SEGMENT_IDS})"
+    prune segment_activities "/rest/v1/line_segment_activities?line_segment_id=in.(${QA_SEGMENT_IDS})"
+  fi
+  prune projects "/rest/v1/projects?organization_id=eq.${QA_ORG}${KEEP_PROJECTS}"
+fi
+
+QA_CREW_IDS="$(id_list "/rest/v1/crews?select=id&organization_id=eq.${QA_ORG}")"
+if [[ -n "$QA_CREW_IDS" ]]; then
+  if [[ "$TEARDOWN" == 1 ]]; then
+    prune crews "/rest/v1/crews?organization_id=eq.${QA_ORG}"
+  else
+    prune crews "/rest/v1/crews?organization_id=eq.${QA_ORG}&id=not.in.(${QA_CREW})"
+    prune crew_default_members "/rest/v1/crew_default_members?crew_id=eq.${QA_CREW}&user_id=not.in.(${QA_OPERATOR},${QA_TRINCHERO})"
+  fi
+fi
+
+if [[ "$TEARDOWN" == 1 ]]; then
+  prune clients "/rest/v1/clients?organization_id=eq.${QA_ORG}"
+  # user_profiles and user_roles cascade from auth.users.
+  for email in "$QA_OPERATOR_EMAIL" "$QA_TRINCHERO_EMAIL"; do
+    uid="$(auth_admin GET "/admin/users?per_page=1000" | jget "
+m=[u['id'] for u in d.get('users',[]) if u.get('email')=='${email}']
+print(m[0] if m else '')")"
+    if [[ -n "$uid" ]]; then
+      auth_admin DELETE "/admin/users/${uid}" >/dev/null
+      printf '  %-22s %s\n' "auth user deleted" "$email"
+    fi
+  done
+  prune organizations "/rest/v1/organizations?id=eq.${QA_ORG}"
+  echo "Teardown done. Run the script with no arguments to build the dataset again."
+  exit 0
+fi
+
+if [[ "$PRUNED" == "0" ]]; then
+  echo "  nothing to prune"
+else
+  echo "  ${PRUNED} non-fixture row(s) removed"
+fi
+
 # ── 1. Organization ─────────────────────────────────────────────────────────
 # Inserting an organization fires the triggers that create its four default
 # roles (admin / supervisor / operator / trinchero) and its task types.
@@ -226,14 +337,17 @@ upsert line_segments "$SEGMENTS_JSON"
 # One of every status the app can render, and four of the six service types,
 # so the map legend and the status filters all have something to show.
 echo "Services..."
+# Every nullable column the app or the web admin can write is spelled out,
+# null included: merge-duplicates only overwrites the keys it is given, so a
+# column left out would keep whatever a tester put there.
 SERVICES_JSON=$(cat <<JSON
 [
-  {"id":"95000000-0000-0000-0000-000000000001","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_1}","service_type":"gas","status":"to_open","notes":"qa-Servicio pendiente de abrir","depth_feet":4,"geometry":"SRID=4326;POINT(-66.8798 10.5001)","created_by":"${QA_OPERATOR}","opened_by":null},
-  {"id":"95000000-0000-0000-0000-000000000002","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_1}","service_type":"power","status":"to_open","notes":"qa-Servicio pendiente de abrir","depth_feet":3,"geometry":"SRID=4326;POINT(-66.8792 10.5003)","created_by":"${QA_OPERATOR}","opened_by":null},
-  {"id":"95000000-0000-0000-0000-000000000003","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_1}","service_type":"water","status":"to_open","notes":"qa-Servicio pendiente de abrir","depth_feet":null,"geometry":"SRID=4326;POINT(-66.8786 10.5005)","created_by":"${QA_OPERATOR}","opened_by":null},
-  {"id":"95000000-0000-0000-0000-000000000004","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_1}","service_type":"telecom","status":"found","notes":"qa-Servicio ubicado con foto","depth_feet":5,"geometry":"SRID=4326;POINT(-66.878 10.5007)","created_by":"${QA_OPERATOR}","opened_by":"${QA_TRINCHERO}"},
-  {"id":"95000000-0000-0000-0000-000000000005","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_2}","service_type":"gas","status":"found","notes":"qa-Servicio ubicado con foto","depth_feet":6,"geometry":"SRID=4326;POINT(-66.8762 10.5012)","created_by":"${QA_OPERATOR}","opened_by":"${QA_TRINCHERO}"},
-  {"id":"95000000-0000-0000-0000-000000000006","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_2}","service_type":"sewer","status":"not_found","notes":"qa-Servicio no encontrado en sitio","depth_feet":null,"geometry":"SRID=4326;POINT(-66.8748 10.5017)","created_by":"${QA_OPERATOR}","opened_by":"${QA_TRINCHERO}"}
+  {"id":"95000000-0000-0000-0000-000000000001","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_1}","service_type":"gas","status":"to_open","notes":"qa-Servicio pendiente de abrir","depth_feet":4,"drill_depth_feet":null,"geometry":"SRID=4326;POINT(-66.8798 10.5001)","service_line":null,"created_by":"${QA_OPERATOR}","opened_by":null,"marked_by":null},
+  {"id":"95000000-0000-0000-0000-000000000002","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_1}","service_type":"power","status":"to_open","notes":"qa-Servicio pendiente de abrir","depth_feet":3,"drill_depth_feet":null,"geometry":"SRID=4326;POINT(-66.8792 10.5003)","service_line":null,"created_by":"${QA_OPERATOR}","opened_by":null,"marked_by":null},
+  {"id":"95000000-0000-0000-0000-000000000003","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_1}","service_type":"water","status":"to_open","notes":"qa-Servicio pendiente de abrir","depth_feet":null,"drill_depth_feet":null,"geometry":"SRID=4326;POINT(-66.8786 10.5005)","service_line":null,"created_by":"${QA_OPERATOR}","opened_by":null,"marked_by":null},
+  {"id":"95000000-0000-0000-0000-000000000004","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_1}","service_type":"telecom","status":"found","notes":"qa-Servicio ubicado con foto","depth_feet":5,"drill_depth_feet":null,"geometry":"SRID=4326;POINT(-66.878 10.5007)","service_line":null,"created_by":"${QA_OPERATOR}","opened_by":"${QA_TRINCHERO}","marked_by":null},
+  {"id":"95000000-0000-0000-0000-000000000005","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_2}","service_type":"gas","status":"found","notes":"qa-Servicio ubicado con foto","depth_feet":6,"drill_depth_feet":null,"geometry":"SRID=4326;POINT(-66.8762 10.5012)","service_line":null,"created_by":"${QA_OPERATOR}","opened_by":"${QA_TRINCHERO}","marked_by":null},
+  {"id":"95000000-0000-0000-0000-000000000006","project_id":"${QA_PROJECT}","line_segment_id":"${QA_SEGMENT_2}","service_type":"sewer","status":"not_found","notes":"qa-Servicio no encontrado en sitio","depth_feet":null,"drill_depth_feet":null,"geometry":"SRID=4326;POINT(-66.8748 10.5017)","service_line":null,"created_by":"${QA_OPERATOR}","opened_by":"${QA_TRINCHERO}","marked_by":null}
 ]
 JSON
 )
