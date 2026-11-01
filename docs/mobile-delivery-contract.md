@@ -176,8 +176,13 @@ eas build --platform android --profile qa --non-interactive
 ```
 
 Until a staging Supabase project exists, `--profile qa` fails on purpose, in the
-build log, with the command above in the message. That is the whole point: the
+build log, and the message names the `development` environment and the
+`eas env:create development …` line for the URL. That is the whole point: the
 failure mode is a missing build, never a QA pass against live field data.
+
+Never repoint `preview` at staging to get a green `qa` build: every
+`preview-build` APK installs what `preview` holds, so that silently moves
+today's only installable artifact off production without anyone noticing.
 
 **Seed it, then build it:** point `SUPABASE_URL` at staging, run
 `SEED_QA_ALLOW_REMOTE=1 ./scripts/seed-qa.sh`, then `eas build --profile qa`.

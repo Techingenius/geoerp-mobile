@@ -28,9 +28,12 @@ export default ({ config }: ConfigContext): ExpoConfig => {
   if (profile === "qa") {
     if (ref === "unset") {
       throw new Error(
-        "eas build --profile qa: EXPO_PUBLIC_SUPABASE_URL is empty. Set the " +
-          "staging Supabase variables in the EAS `preview` environment " +
-          "(eas env:create --environment preview) before building qa.",
+        "eas build --profile qa: EXPO_PUBLIC_SUPABASE_URL is empty. The qa " +
+          "profile reads the EAS `development` environment, which holds the " +
+          "STAGING variables (`preview` holds production). Create them first: " +
+          "eas env:create development --name EXPO_PUBLIC_SUPABASE_URL " +
+          "--value https://<staging-ref>.supabase.co — the other two are in " +
+          "docs/mobile-delivery-contract.md.",
       );
     }
     if (ref === PRODUCTION_SUPABASE_REF) {
@@ -38,7 +41,10 @@ export default ({ config }: ConfigContext): ExpoConfig => {
         "eas build --profile qa points at the PRODUCTION Supabase project " +
           `(${PRODUCTION_SUPABASE_REF}). A QA build against production is not ` +
           "reviewable — see docs/mobile-delivery-contract.md. Point the EAS " +
-          "`preview` environment at the staging project and rebuild.",
+          "`development` environment at the staging project and rebuild: " +
+          "eas env:update development --variable-name EXPO_PUBLIC_SUPABASE_URL " +
+          "--value https://<staging-ref>.supabase.co. Do NOT repoint " +
+          "`preview` — that is what today's preview-build APKs install.",
       );
     }
   }
