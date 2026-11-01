@@ -69,6 +69,11 @@ pass; a deliberate `No Requerido` with a reason is.
 | `Mobile Delivery Contract / Preview build label` | `.github/workflows/mobile-delivery-contract.yml` | the PR touches `app/**`, `components/**`, `assets/**`, `global.css`, `tailwind.config.js`, `app.json`, `app.config.ts`, `babel.config.js`, `metro.config.js` or `eas.json` and does not carry the `preview-build` label |
 | QA build against production | `app.config.ts` | `eas build --profile qa` resolves a Supabase URL that is the production project, or none at all |
 
+The `Android Preview Build` workflow builds the **PR head** — not the
+`refs/pull/N/merge` commit a checkout defaults to — and its comment names the
+build id, the profile and that head SHA, so the delivery block can be filled in
+by copying rather than by recollection.
+
 The path list lives in `.github/scripts/needs-preview-build.js` so it can be
 exercised without queueing a run:
 
