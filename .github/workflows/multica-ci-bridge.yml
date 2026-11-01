@@ -1,0 +1,108 @@
+name: Multica CI Bridge
+
+# Wakes the Multica agent that is waiting on this PR's CI.
+#
+# Why this exists: Multica Cloud never fetches the GitHub check snapshot for this
+# workspace, so `multica issue wakeup create --until-pr checks` is accepted,
+# reports `fire_count: 0` with `last_error: null`, and can never become true.
+# Root cause is upstream and not ours to fix — the hosted `multica-ai` GitHub App
+# does not request the `Contents` permission that Multica's own snapshot query
+# requires, and without it the whole snapshot fails. Tracked at
+# multica-ai/multica#8935, open since 2026-09-28.
+#
+# Ported to this repo by GRA-945. It replaces `.github/scripts/notify-ci-autopilot.sh`,
+# which exited 0 when its `AUTOPILOT_WEBHOOK_URL` secret was absent (it was), so
+# the `Notify CI Autopilot` check read SUCCESS while nothing was ever delivered.
+# The receiving autopilot it targeted no longer exists either. This file is the
+# twin of the bridges carrying `steam-connect-oms` (2026-10-08) and `geoerp`
+# (2026-10-12); the receiver here is the `CI Bridge — geoerp-mobile` autopilot.
+#
+# This workflow is only a doorbell. It carries no decision logic on purpose: the
+# payload is ignored and the autopilot on the other end re-reads the real state
+# from `gh pr checks` and from Multica. That keeps the two sides from drifting
+# apart, and means a stale copy of this file on the default branch cannot make a
+# wrong call — the worst it can do is ring at a slightly wrong moment.
+#
+# NOT a required status check, and it cannot accidentally become one: a
+# `workflow_run` workflow never reports a check back onto the pull request, so a
+# workflow that never reports cannot leave a PR permanently "expected" and
+# unmergeable. It is also why this cannot be a job inside `ci.yml`: that would
+# add a step to the required checks, and a bridge outage would then fail the gate.
+#
+# Scope: `CI` carries both required checks (Type Check, Lint), so one watched
+# workflow means exactly one delivery per head, and on that delivery both are
+# already terminal. `Android Preview Build` is opt-in by label, runs on EAS and is
+# not required, so it is not watched.
+#
+# `workflow_run` always runs the copy of this file on the DEFAULT branch
+# (`main`), never the PR's copy. So this does nothing until it is merged to
+# `main`, and edits to it only take effect after they land there.
+
+on:
+  workflow_run:
+    workflows:
+      - CI
+    types: [completed]
+
+# One watched workflow means one delivery per head, so this is only guarding
+# against concurrent pushes racing each other. Grouping by head sha keeps them
+# independent.
+concurrency:
+  group: multica-ci-bridge-${{ github.event.workflow_run.head_sha }}
+  cancel-in-progress: true
+
+permissions: {}
+
+jobs:
+  ring:
+    # Pull request CI only. Pushes to `main` have no agent waiting on a gate.
+    if: github.event.workflow_run.event == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Ring the Multica autopilot
+        env:
+          BRIDGE_URL: ${{ secrets.MULTICA_CI_BRIDGE_URL }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          HEAD_BRANCH: ${{ github.event.workflow_run.head_branch }}
+          WORKFLOW_NAME: ${{ github.event.workflow_run.name }}
+          WORKFLOW_CONCLUSION: ${{ github.event.workflow_run.conclusion }}
+          RUN_URL: ${{ github.event.workflow_run.html_url }}
+        run: |
+          set -euo pipefail
+
+          # An unset secret is a configuration state, not a failure: a fork or a
+          # fresh clone should stay green and simply not have a bridge.
+          if [ -z "${BRIDGE_URL}" ]; then
+            echo "::notice title=Multica CI Bridge::MULTICA_CI_BRIDGE_URL is not set; nothing to ring."
+            exit 0
+          fi
+
+          # The receiver ignores this body and re-reads state itself. It is here
+          # so a delivery in the autopilot's log can be traced to a run.
+          payload=$(printf '{"source":"github-actions","head_sha":"%s","head_branch":"%s","workflow":"%s","conclusion":"%s","run_url":"%s"}' \
+            "${HEAD_SHA}" "${HEAD_BRANCH}" "${WORKFLOW_NAME}" "${WORKFLOW_CONCLUSION}" "${RUN_URL}")
+
+          # `--retry-all-errors` so a connection reset retries too, not just an
+          # HTTP status. Never `-f`: we want the body for the log on a 4xx.
+          http_code=$(curl --silent --show-error \
+            --request POST "${BRIDGE_URL}" \
+            --header 'Content-Type: application/json' \
+            --data "${payload}" \
+            --max-time 20 --retry 3 --retry-delay 2 --retry-all-errors \
+            --output response.txt --write-out '%{http_code}') || http_code=000
+
+          echo "HTTP ${http_code} for ${WORKFLOW_NAME} on ${HEAD_SHA}"
+          # The URL is a credential — anything that could echo it stays out of
+          # the log. The response body is Multica's and safe to print.
+          sed -e 's/[[:space:]]\+$//' response.txt | head -c 2000 || true
+          echo
+
+          # Fail loudly on a bad delivery. This blocks no pull request, and a red
+          # run here is the only signal that agents have silently gone back to
+          # waiting on nothing.
+          case "${http_code}" in
+            2*) echo "::notice title=Multica CI Bridge::Delivered." ;;
+            000) echo "::error title=Multica CI Bridge::No HTTP response after retries." ; exit 1 ;;
+            *) echo "::error title=Multica CI Bridge::Multica rejected the delivery (HTTP ${http_code})." ; exit 1 ;;
+          esac
