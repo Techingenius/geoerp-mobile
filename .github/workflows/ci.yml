@@ -49,6 +49,31 @@ jobs:
       - name: Run ESLint
         run: npx eslint . --ext .ts,.tsx
 
+  # GRA-951: the unit gate over lib/api/. Runs the jest-expo suite twice, once
+  # per platform project, so a guard or mapper that diverges between iOS and
+  # Android fails here rather than in the field.
+  #
+  # Not in `notify-autopilot`'s `needs`: that job's script waits for every other
+  # check on the commit to settle before it reports, so this one is already
+  # covered without widening the dependency graph.
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run unit tests
+        run: npm test -- --ci
 
   # GRA-661: the single trigger for the CI autopilot.
   #
