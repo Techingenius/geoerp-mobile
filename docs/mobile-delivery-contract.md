@@ -66,7 +66,7 @@ pass; a deliberate `No Requerido` with a reason is.
 
 | Check | Where | Fails when |
 |---|---|---|
-| `Mobile Delivery Contract / Preview build label` | `.github/workflows/mobile-delivery-contract.yml` | the PR touches `app/**`, `components/**`, `assets/**`, `global.css`, `tailwind.config.js`, `app.json`, `app.config.ts`, `babel.config.js`, `metro.config.js` or `eas.json` and does not carry the `preview-build` label |
+| `Mobile Delivery Contract / Preview build label` | `.github/workflows/mobile-delivery-contract.yml` | the PR touches `app/**`, `components/**`, `lib/**`, `constants/**`, `assets/**`, `global.css`, `tailwind.config.js`, `app.json`, `app.config.ts`, `babel.config.js`, `metro.config.js` or `eas.json` and does not carry the `preview-build` label |
 | QA build against production | `app.config.ts` | `eas build --profile qa` resolves a Supabase URL that is the production project, or none at all |
 
 The `Android Preview Build` workflow builds the **PR head** — not the
@@ -93,12 +93,14 @@ change once this has run on a few PRs.
 
 ## What the reviewer writes back
 
-Visual QA on mobile is Joey's, over the input Ben produces; Ross is the stand-in;
-**the stand-in is never the PR author** (A18, B-O3).
+Visual QA on mobile is Joey's, over the input Ben produces, and **the stand-in
+is never the PR author** (B-O3). A18 (GRA-965) does not name a stand-in for this
+gate yet, so this table does not invent one — by analogy with Visual QA web it
+would be Ross, but that is A18's call to make, not this document's.
 
 | Gate | Input | Produced by | Titular | Stand-in | If the input is missing |
 |---|---|---|---|---|---|
-| Visual QA (mobile) | build id + screenshots + matrix, tied to the head SHA | **Ben** (PR author) | Joey | Ross | the gate goes back to **Ben**, not to `Pendiente` on Joey |
+| Visual QA (mobile) | build id + screenshots + matrix, tied to the head SHA | **Ben** (PR author) | Joey | — (pending A18 · GRA-965) | the gate goes back to **Ben**, not to `Pendiente` on Joey |
 
 ```
 Gate: Visual QA (mobile) = <Aprobado|Rechazado>
@@ -122,9 +124,9 @@ An approval is tied to the SHA it was written against (A5). On a new head the
 mobile gate is **inherited** only when the push was a clean rebase, or the whole
 delta is `*.md` / `docs/**`.
 
-If the delta touches `app/**`, `components/**`, `global.css`,
-`tailwind.config.*`, `app.json`, `app.config.ts`, `eas.json` or a native
-dependency in `package.json`, the gate goes back to `Pendiente` **and the PR has
+If the delta touches `app/**`, `components/**`, `lib/**`, `constants/**`,
+`global.css`, `tailwind.config.*`, `app.json`, `app.config.ts`, `eas.json` or a
+native dependency in `package.json`, the gate goes back to `Pendiente` **and the PR has
 to carry a build of the new head**. There is no "a green check justifies
 inheriting" escape hatch here: the required checks are `Type Check` and `Lint`,
 and neither has ever seen a pixel. Revisit this once `test` is required

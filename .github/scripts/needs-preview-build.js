@@ -11,9 +11,18 @@
 // — a devDependency cannot reach a screen, and making every bump cost a 15 min
 // EAS build is how a gate gets routed around. A native dependency change still
 // needs a build; that call stays with the author.
+//
+// `lib/**` and `constants/**` are on the list even though they render nothing
+// themselves: the query hooks and mappers under `lib/api/` decide what every
+// screen displays (GRA-769 was a mapper collapsing roles, GRA-906 a guard
+// mounting without a session), and on mobile there is no way to exercise either
+// without an installed APK. `__tests__/**` is not on the list for the same
+// reason dependencies are not.
 const NEEDS_BUILD = [
   /^app\//,
   /^components\//,
+  /^lib\//,
+  /^constants\//,
   /^assets\//,
   /^global\.css$/,
   /^tailwind\.config\.js$/,

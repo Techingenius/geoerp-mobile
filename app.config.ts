@@ -6,10 +6,16 @@ import { ExpoConfig, ConfigContext } from "expo/config";
 // ship QA a binary pointing at live field data.
 const PRODUCTION_SUPABASE_REF = "vwyfkqjhawrycskuqbpw";
 
-/** `abc123` out of `https://abc123.supabase.co`; a local stack has no ref. */
+/**
+ * `abc123` out of `https://abc123.supabase.co`; a local stack has no ref.
+ * Lower-cased: a hostname is case-insensitive, so `https://VWYFK….supabase.co`
+ * is the production project and has to compare equal to it. This is a safety
+ * check, and a safety check that can be defeated by holding shift is not one.
+ */
 const supabaseRef = (url: string): string => {
   if (!url) return "unset";
-  return url.match(/^https:\/\/([a-z0-9]+)\.supabase\.co/i)?.[1] ?? "custom";
+  const ref = url.match(/^https:\/\/([a-z0-9]+)\.supabase\.co/i)?.[1];
+  return ref ? ref.toLowerCase() : "custom";
 };
 
 export default ({ config }: ConfigContext): ExpoConfig => {
