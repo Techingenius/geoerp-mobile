@@ -50,7 +50,8 @@
 #   SUPABASE_SERVICE_ROLE_KEY   from `supabase status` in $GEOERP_DIR if unset
 #   SUPABASE_ANON_KEY           idem — used to verify sign-in the way the app does
 #   GEOERP_DIR                  default ../geoerp (same convention as sync-types.sh)
-#   QA_PASSWORD                 default QaMovil123!
+#   QA_PASSWORD                 default QaMovil123! — required for a remote target,
+#                               because that default is published right here
 #   SEED_QA_ALLOW_REMOTE        1 to allow a non-localhost target
 # ============================================================================
 set -euo pipefail
@@ -60,6 +61,7 @@ MOBILE_ROOT="$(cd "$SCRIPT_DIR/.." && pwd)"
 
 PRODUCTION_REF="vwyfkqjhawrycskuqbpw"       # GeoERP production — never a target
 GEOERP_DIR="${GEOERP_DIR:-$MOBILE_ROOT/../geoerp}"
+QA_PASSWORD_SET="${QA_PASSWORD:-}"            # empty means "taking the default"
 QA_PASSWORD="${QA_PASSWORD:-QaMovil123!}"
 
 TEARDOWN=0
@@ -74,6 +76,12 @@ need() { command -v "$1" >/dev/null || { echo "ERROR: '$1' not found" >&2; exit 
 need curl; need python3
 
 jget() { python3 -c "import sys,json;d=json.load(sys.stdin);$1"; }
+
+# A quote or a backslash in QA_PASSWORD would otherwise break every body it
+# goes into, so encode it once as a JSON string (quotes included).
+json_str() { printf '%s' "$1" | python3 -c 'import sys,json;print(json.dumps(sys.stdin.read()))'; }
+
+QA_PASSWORD_JSON="$(json_str "$QA_PASSWORD")"
 
 # ── Resolve the target and its keys ─────────────────────────────────────────
 API_URL="${SUPABASE_URL:-}"
@@ -108,9 +116,26 @@ if [[ "$API_URL" == *"$PRODUCTION_REF"* ]]; then
   echo "          A real mobile QA environment is GRA-973." >&2
   exit 1
 fi
-if [[ "$API_URL" != *"127.0.0.1"* && "$API_URL" != *localhost* && "${SEED_QA_ALLOW_REMOTE:-0}" != "1" ]]; then
-  echo "REFUSING: $API_URL is not a local stack. Set SEED_QA_ALLOW_REMOTE=1 if you" >&2
-  echo "          really mean to seed a shared database." >&2
+# Compare the parsed host, not a substring of the URL: `localhost.example.com`
+# and `https://supabase.co/?127.0.0.1` both contain a local-looking needle.
+API_HOST="$(printf '%s' "$API_URL" | python3 -c '
+import sys
+from urllib.parse import urlsplit
+print((urlsplit(sys.stdin.read().strip()).hostname or "").lower())')"
+case "$API_HOST" in
+  127.0.0.1|localhost|::1|0.0.0.0) IS_LOCAL=1 ;;
+  *)                               IS_LOCAL=0 ;;
+esac
+if [[ "$IS_LOCAL" == 0 && "${SEED_QA_ALLOW_REMOTE:-0}" != "1" ]]; then
+  echo "REFUSING: ${API_HOST:-$API_URL} is not a local stack. Set SEED_QA_ALLOW_REMOTE=1" >&2
+  echo "          if you really mean to seed a shared database." >&2
+  exit 1
+fi
+# The default password is published in this file, so it is fine for a stack only
+# you can reach and not for one anybody can.
+if [[ "$IS_LOCAL" == 0 && -z "${QA_PASSWORD_SET:-}" ]]; then
+  echo "REFUSING: a shared target needs an explicit QA_PASSWORD. The default is" >&2
+  echo "          public in this script, and these accounts are created confirmed." >&2
   exit 1
 fi
 
@@ -145,10 +170,33 @@ upsert() {  # table json  (single object or array of objects)
   printf '  %-22s %s row(s)\n' "$1" "$n"
 }
 
-auth_admin() {  # method path [body]
-  curl -sS -X "$1" "${API_URL}/auth/v1$2" \
+# Same fail-loud contract as req(): a password rotation that quietly 4xx'd
+# would leave the account on an unknown credential and only surface as a
+# puzzling sign-in failure later. `allow` lists codes the caller handles.
+auth_admin() {  # method path [body] [allow-code]
+  local method="$1" path="$2" body="${3:-}" allow="${4:-}" raw code
+  raw="$(curl -sS -X "$method" "${API_URL}/auth/v1${path}" \
     -H "apikey: ${SERVICE_KEY}" -H "Authorization: Bearer ${SERVICE_KEY}" \
-    -H "Content-Type: application/json" ${3:+-d "$3"}
+    -H "Content-Type: application/json" ${body:+-d "$body"} -w $'\n%{http_code}')"
+  code="${raw##*$'\n'}"
+  raw="${raw%$'\n'*}"
+  if [[ "$code" != 2* && "$code" != "$allow" ]]; then
+    echo "ERROR: $method /auth/v1$path → HTTP $code" >&2
+    echo "       $raw" >&2
+    exit 1
+  fi
+  printf '%s' "$raw"
+}
+
+# The fixture id is the normal case, so ask for it directly; the email search
+# only covers an account that predates the fixed ids.
+find_user() {  # want-id email → id or empty
+  local by_id
+  by_id="$(auth_admin GET "/admin/users/$1" "" 404 | jget "print(d.get('id','') if d.get('email')=='$2' else '')")"
+  if [[ -n "$by_id" ]]; then printf '%s' "$by_id"; return; fi
+  auth_admin GET "/admin/users?filter=$2&per_page=100" | jget "
+m=[u['id'] for u in d.get('users',[]) if u.get('email')=='$2']
+print(m[0] if m else '')"
 }
 
 # ── Fixture ids ─────────────────────────────────────────────────────────────
@@ -244,9 +292,10 @@ if [[ "$TEARDOWN" == 1 ]]; then
   prune clients "/rest/v1/clients?organization_id=eq.${QA_ORG}"
   # user_profiles and user_roles cascade from auth.users.
   for email in "$QA_OPERATOR_EMAIL" "$QA_TRINCHERO_EMAIL"; do
-    uid="$(auth_admin GET "/admin/users?per_page=1000" | jget "
-m=[u['id'] for u in d.get('users',[]) if u.get('email')=='${email}']
-print(m[0] if m else '')")"
+    case "$email" in
+      "$QA_OPERATOR_EMAIL")  uid="$(find_user "$QA_OPERATOR" "$email")" ;;
+      *)                     uid="$(find_user "$QA_TRINCHERO" "$email")" ;;
+    esac
     if [[ -n "$uid" ]]; then
       auth_admin DELETE "/admin/users/${uid}" >/dev/null
       printf '  %-22s %s\n' "auth user deleted" "$email"
@@ -277,19 +326,17 @@ seed_user() {  # id email full_name role_name → echoes the id actually in use
   local want_id="$1" email="$2" full_name="$3" role="$4" user_id role_id
   local meta="{\"full_name\":\"${full_name}\",\"organization_id\":\"${QA_ORG}\"}"
 
-  user_id="$(auth_admin GET "/admin/users?per_page=1000" | jget "
-m=[u['id'] for u in d.get('users',[]) if u.get('email')=='${email}']
-print(m[0] if m else '')")"
+  user_id="$(find_user "$want_id" "$email")"
 
   if [[ -z "$user_id" ]]; then
     user_id="$(auth_admin POST /admin/users \
-      "{\"id\":\"${want_id}\",\"email\":\"${email}\",\"password\":\"${QA_PASSWORD}\",\"email_confirm\":true,\"user_metadata\":${meta}}" \
+      "{\"id\":\"${want_id}\",\"email\":\"${email}\",\"password\":${QA_PASSWORD_JSON},\"email_confirm\":true,\"user_metadata\":${meta}}" \
       | jget "
 if not d.get('id'): sys.exit('create failed: '+json.dumps(d))
 print(d['id'])")"
   else
     auth_admin PUT "/admin/users/${user_id}" \
-      "{\"password\":\"${QA_PASSWORD}\",\"email_confirm\":true,\"user_metadata\":${meta}}" >/dev/null
+      "{\"password\":${QA_PASSWORD_JSON},\"email_confirm\":true,\"user_metadata\":${meta}}" >/dev/null
   fi
 
   req POST "/rest/v1/user_profiles?on_conflict=id" \
@@ -385,7 +432,7 @@ upsert crew_default_members "$MEMBERS_JSON"
 echo "Verifying as ${QA_OPERATOR_EMAIL} (anon key, same path as the app)..."
 LOGIN="$(curl -sS -X POST "${API_URL}/auth/v1/token?grant_type=password" \
   -H "apikey: ${ANON_KEY}" -H "Content-Type: application/json" \
-  -d "{\"email\":\"${QA_OPERATOR_EMAIL}\",\"password\":\"${QA_PASSWORD}\"}")"
+  -d "{\"email\":\"${QA_OPERATOR_EMAIL}\",\"password\":${QA_PASSWORD_JSON}}")"
 TOKEN="$(printf '%s' "$LOGIN" | jget "print(d.get('access_token',''))")"
 [[ -n "$TOKEN" ]] || { echo "ERROR: sign-in failed: ${LOGIN}" >&2; exit 1; }
 
