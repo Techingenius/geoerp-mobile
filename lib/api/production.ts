@@ -2,9 +2,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../supabase/client";
 import type {
   Crew,
-  ProductionBillingStatus,
   ProductionEntry,
-  ProductionInternalStatus,
   UnitType,
 } from "../../types/database";
 
@@ -118,103 +116,70 @@ export interface CreateProductionEntryInput {
 }
 
 /**
- * The entry row committed but its crew_members rows did not.
- *
- * These are two PostgREST requests, so two transactions: losing signal between
- * them leaves a committed entry with no roster. That is a partial success, and
- * it must not reach the user as a plain failure — the entry is already in the
- * web approval queue, and a retry creates a second billable one. The screen
- * branches on this type to say the entry WAS saved.
- *
- * The real fix is a single `create_production_entry_with_members(...)` RPC in
- * `geoerp`; the web hook has the same two-step. Tracked in GRA-766.
- */
-export class ProductionMembersError extends Error {
-  readonly entryId: string;
-
-  constructor(entryId: string, cause: unknown) {
-    super(
-      cause instanceof Error
-        ? cause.message
-        : "No se pudieron guardar los integrantes",
-    );
-    this.name = "ProductionMembersError";
-    this.entryId = entryId;
-    this.cause = cause;
-  }
-}
-
-/**
  * Create a production entry at the first tier of the approval workflow.
  *
- * The initial state matches what the web app's approval workflow expects
- * (`apps/web/src/hooks/use-production.ts`): `internal_status: 'reported'` and
- * `billing_status: 'pending'`, both written explicitly rather than left to the
- * column defaults. Supervisor/admin approval and billing transitions stay on
- * the web side.
+ * One `create_production_entry` call writes the entry AND its `crew_members`
+ * in a single transaction (GRA-766, GRA-832). It replaces the two-step insert
+ * this hook used to do, where losing signal between the two requests left a
+ * committed entry with no roster — the expected case here, not the edge, since
+ * crews report from the field on intermittent signal.
  *
- * `project_id` is sent on the insert because every RLS policy on this table
- * resolves the org through `production_entries.project_id` — the same scope
- * field whose omission broke service creation in GRA-396.
+ * The RPC is `SECURITY INVOKER`, so the RLS policies of `production_entries`
+ * and `crew_members` apply exactly as they did to the direct inserts, and the
+ * `production_entries` triggers hold the entry to the segment's activities and
+ * plan. It also fills `reported_by` / `created_by` from `auth.uid()` and sets
+ * `internal_status: 'reported'` / `billing_status: 'pending'` server-side, so
+ * the client no longer sends them — nor does it need a round trip to read the
+ * current user first. Web (`apps/web/src/hooks/use-production.ts`) and the
+ * `daily-report` Edge Function go through the same function.
  */
 export function useCreateProductionEntry() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (input: CreateProductionEntryInput) => {
+      // Local read from AsyncStorage, not a round trip like `getUser()`. Only
+      // to keep the "no session" case in the app's language: without it the
+      // call goes out as anon and comes back as a bare permission-denied.
       const {
-        data: { user },
-      } = await supabase.auth.getUser();
+        data: { session },
+      } = await supabase.auth.getSession();
 
-      if (!user) throw new Error("No hay sesión activa");
+      if (!session) throw new Error("No hay sesión activa");
 
       const notes = input.notes?.trim();
 
-      const { data: entry, error } = await supabase
-        .from("production_entries")
-        .insert({
-          project_id: input.project_id,
-          line_segment_id: input.line_segment_id ?? null,
-          crew_id: input.crew_id,
-          units_completed: input.units_completed,
-          unit_type: input.unit_type,
-          work_date: input.work_date,
-          notes: notes ? notes : null,
-          reported_by: user.id,
-          created_by: user.id,
-          internal_status: "reported" satisfies ProductionInternalStatus,
-          billing_status: "pending" satisfies ProductionBillingStatus,
-        })
-        .select()
-        .single();
+      // No `.single()`: the function returns one `production_entries` row, so
+      // PostgREST answers with the object itself. Same call shape as web and
+      // the `daily-report` Edge Function.
+      const { data: entry, error } = await supabase.rpc(
+        "create_production_entry",
+        {
+          p_project_id: input.project_id,
+          p_crew_id: input.crew_id,
+          p_units_completed: input.units_completed,
+          p_unit_type: input.unit_type,
+          p_work_date: input.work_date,
+          p_crew_member_ids: input.crew_member_ids,
+          p_line_segment_id: input.line_segment_id ?? undefined,
+          p_notes: notes ? notes : undefined,
+        },
+      );
 
+      // Not special-cased by code: `42501` is both the RPC's own
+      // "Not authenticated" and any RLS denial, so the database's message is
+      // more honest than anything this layer could substitute for it.
       if (error) throw error;
-
-      if (input.crew_member_ids.length > 0) {
-        const { error: membersError } = await supabase
-          .from("crew_members")
-          .insert(
-            input.crew_member_ids.map((user_id) => ({
-              production_entry_id: entry.id,
-              user_id,
-              rate_applied: null,
-            })),
-          );
-
-        // The entry is already committed at this point, so this is a partial
-        // success, not a failure. Carry the entry id so the caller can say so.
-        if (membersError) {
-          throw new ProductionMembersError(entry.id, membersError);
-        }
-      }
 
       return entry as ProductionEntry;
     },
-    // onSettled, not onSuccess: the error path can also have committed the
-    // entry row (see ProductionMembersError). Invalidating only on success
-    // leaves a 5-minute-stale list, which is also what the duplicate-entry
-    // banner reads, so the one case that most needs the warning would not get
-    // it. Keyed off `variables` because `data` is undefined on the error path.
+    // onSettled, not onSuccess. The write is atomic now, so a failure never
+    // leaves a half-written entry — but a response lost on the way back still
+    // leaves a COMMITTED entry the app believes failed. The recent-entries
+    // list is what the duplicate-entry banner reads, so refreshing it on both
+    // paths is what gives the reporter a chance to see the entry that did land
+    // instead of reporting it twice. Keyed off `variables` because `data` is
+    // undefined on the error path.
     onSettled: (_entry, _error, variables) => {
       queryClient.invalidateQueries({
         queryKey: productionKeys.byProject(variables.project_id),

@@ -20,7 +20,6 @@ import {
   useCrewDefaultMembers,
   useCreateProductionEntry,
   useProjectProductionEntries,
-  ProductionMembersError,
 } from "../../lib/api/production";
 import { useAuthStore } from "../../lib/stores/auth-store";
 import { Input } from "../../components/ui/Input";
@@ -267,21 +266,9 @@ export default function ProductionEntryScreen() {
         "El reporte quedó en estado Reportado, pendiente de aprobación del supervisor.",
       );
     } catch (error) {
-      // The entry committed and only its roster failed. Telling the reporter
-      // this failed would invite a retry, and a retry here is a second
-      // billable entry in the approval queue that only an admin can delete.
-      if (error instanceof ProductionMembersError) {
-        console.warn(
-          `[ProductionEntry] entry ${error.entryId} saved without crew_members:`,
-          error.cause,
-        );
-        clearForNextEntry();
-        Alert.alert(
-          "Producción guardada — faltan los integrantes",
-          "El reporte SÍ quedó registrado y ya está en la cola de aprobación. NO lo vuelvas a enviar.\n\nLo único que no se guardó son los integrantes del turno. Pedile a un supervisor que los agregue desde la web.",
-        );
-        return;
-      }
+      // The entry and its roster are one transaction now (GRA-832), so a
+      // failure here wrote nothing and a retry is safe — there is no
+      // entry-saved-roster-failed state left to warn about.
       Alert.alert("No se pudo registrar", getErrorMessage(error));
     }
   };
