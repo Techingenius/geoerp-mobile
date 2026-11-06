@@ -203,7 +203,13 @@ Before pushing any code:
 - **Never push directly to main** — always open a PR
 - Branch naming: `GRA-<number>/<short-description>`
 - PR title: include issue key — `feat: GRA-400 mobile UI overhaul`
-- Request review from **Ross** before merge
+- **Follow the delivery contract** — `docs/mobile-delivery-contract.md`. A PR
+  that changes what the app renders or what the binary is needs the
+  `preview-build` label (the `Preview build label` check fails without it), and
+  its delivery comment carries the surfaces this run had, the backend the build
+  talks to, and the screenshots **attached**, not linked.
+- To ask for review, leave the gates (`QA Status`, `Visual QA`) in `Pendiente`
+  with a gatekeeper watching that value — not an @mention
 - After merge: verify on device that the changes work as expected
 
 ## Common Gotchas

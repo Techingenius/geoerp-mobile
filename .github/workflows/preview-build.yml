@@ -53,6 +53,12 @@ jobs:
 
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # The PR head, not the `refs/pull/N/merge` commit checkout defaults to
+          # on a pull_request event. The delivery contract anchors a gate to the
+          # head SHA (A5), so an APK built from a commit that exists only inside
+          # this workflow run can never be the thing that was approved.
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -110,6 +116,7 @@ jobs:
           fi
 
           echo "build_page=$BUILD_PAGE" >> "$GITHUB_OUTPUT"
+          echo "build_id=$BUILD_ID" >> "$GITHUB_OUTPUT"
           echo "Queued EAS build $BUILD_ID -> $BUILD_PAGE"
 
       - name: Comment build link on PR
@@ -117,7 +124,9 @@ jobs:
         uses: actions/github-script@v7
         env:
           BUILD_PAGE: ${{ steps.build.outputs.build_page }}
+          BUILD_ID: ${{ steps.build.outputs.build_id }}
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.inputs.pr }}
+          HEAD_SHA: ${{ github.event.pull_request.head.sha || github.sha }}
         with:
           script: |
             const issue_number = Number(process.env.PR_NUMBER);
@@ -133,7 +142,9 @@ jobs:
               'embeds the Google Maps API key, so its direct artifact URL is never posted',
               'on this public repository.',
               '',
-              `Queued from commit \`${context.sha.substring(0, 7)}\``,
+              // Quotable in the delivery block: the gate is approved against a
+              // SHA, so the build has to name the same one.
+              `Build \`${process.env.BUILD_ID}\` · profile \`preview\` · commit \`${process.env.HEAD_SHA.substring(0, 7)}\``,
             ].join('\n');
 
             // Replace our own previous comment rather than deleting anything that
