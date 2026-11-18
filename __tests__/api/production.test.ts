@@ -3,7 +3,6 @@ import {
   allArgsOf,
   argsOf,
   createSupabaseMock,
-  type RecordedQuery,
   type SupabaseMock,
 } from "../helpers/supabase-mock";
 import { renderQueryHook } from "../helpers/render-query-hook";
@@ -18,7 +17,6 @@ jest.mock("../../lib/supabase/client", () => ({
 
 // Imported after the mock so the module-level `supabase` binding is the stub.
 import {
-  ProductionMembersError,
   productionKeys,
   useActiveCrews,
   useCreateProductionEntry,
@@ -26,6 +24,15 @@ import {
   useProjectProductionEntries,
   type CreateProductionEntryInput,
 } from "../../lib/api/production";
+
+/**
+ * The single database function the create hook writes through (GRA-832). The
+ * entry and its `crew_members` land in one transaction, so there is no second
+ * request to lose and no half-written entry to report on — which is why these
+ * tests assert on the function's arguments rather than on a sequence of
+ * inserts, and why no test here queues a `crew_members` table response.
+ */
+const CREATE_ENTRY = "create_production_entry";
 
 const entryInput: CreateProductionEntryInput = {
   project_id: "project-1",
@@ -36,8 +43,14 @@ const entryInput: CreateProductionEntryInput = {
   crew_member_ids: [],
 };
 
-function insertPayload(query: RecordedQuery) {
-  return argsOf(query, "insert")?.[0] as Record<string, unknown>;
+/** A mock whose `create_production_entry` answers with one committed row. */
+function mockReturning(entry: Record<string, unknown> = { id: "entry-1" }) {
+  return createSupabaseMock({ rpcs: { [CREATE_ENTRY]: { data: entry } } });
+}
+
+/** The arguments the hook sent to `create_production_entry`. */
+function rpcParams() {
+  return mock.onlyRpc(CREATE_ENTRY).params as Record<string, unknown>;
 }
 
 describe("useActiveCrews", () => {
@@ -205,90 +218,15 @@ describe("useCreateProductionEntry", () => {
       );
     });
 
+    // The local session read exists to keep this case in the app's language;
+    // without it the call would go out as anon and come back as a bare
+    // permission-denied, so nothing may reach the database first.
+    expect(mock.supabase.rpc).not.toHaveBeenCalled();
     expect(mock.supabase.from).not.toHaveBeenCalled();
   });
 
-  it("writes the first approval tier explicitly and stamps the author", async () => {
-    mock = createSupabaseMock({
-      user: { id: "user-9" },
-      tables: { production_entries: { data: { id: "entry-1" } } },
-    });
-
-    const { result } = await renderQueryHook(() => useCreateProductionEntry());
-    await act(async () => {
-      await result.current.mutateAsync(entryInput);
-    });
-
-    expect(insertPayload(mock.only("production_entries"))).toEqual({
-      project_id: "project-1",
-      line_segment_id: null,
-      crew_id: "crew-1",
-      units_completed: 12,
-      unit_type: "drilling_ft",
-      work_date: "2026-10-31",
-      notes: null,
-      reported_by: "user-9",
-      created_by: "user-9",
-      // Written, not left to the column default: the web approval queue reads
-      // this pair and a changed default must not silently reroute the entry.
-      internal_status: "reported",
-      billing_status: "pending",
-    });
-  });
-
-  it("sends project_id on the insert, since every RLS policy resolves org through it", async () => {
-    mock = createSupabaseMock({
-      tables: { production_entries: { data: { id: "entry-1" } } },
-    });
-
-    const { result } = await renderQueryHook(() => useCreateProductionEntry());
-    await act(async () => {
-      await result.current.mutateAsync(entryInput);
-    });
-
-    expect(insertPayload(mock.only("production_entries")).project_id).toBe(
-      "project-1",
-    );
-  });
-
-  it.each([
-    ["trims surrounding whitespace", "  pozo tapado  ", "pozo tapado"],
-    ["stores whitespace-only notes as null", "   ", null],
-    ["stores an empty note as null", "", null],
-    ["stores an omitted note as null", undefined, null],
-  ])("%s", async (_label, notes, expected) => {
-    mock = createSupabaseMock({
-      tables: { production_entries: { data: { id: "entry-1" } } },
-    });
-
-    const { result } = await renderQueryHook(() => useCreateProductionEntry());
-    await act(async () => {
-      await result.current.mutateAsync({ ...entryInput, notes });
-    });
-
-    expect(insertPayload(mock.only("production_entries")).notes).toBe(expected);
-  });
-
-  it("skips the crew_members write when nobody is on the shift", async () => {
-    mock = createSupabaseMock({
-      tables: { production_entries: { data: { id: "entry-1" } } },
-    });
-
-    const { result } = await renderQueryHook(() => useCreateProductionEntry());
-    await act(async () => {
-      await result.current.mutateAsync({ ...entryInput, crew_member_ids: [] });
-    });
-
-    expect(mock.on("crew_members")).toHaveLength(0);
-  });
-
-  it("writes one crew_members row per worker, with the rate left to the web side", async () => {
-    mock = createSupabaseMock({
-      tables: {
-        production_entries: { data: { id: "entry-7" } },
-        crew_members: {},
-      },
-    });
+  it("writes the entry and its roster in a single call", async () => {
+    mock = mockReturning({ id: "entry-7" });
 
     const { result } = await renderQueryHook(() => useCreateProductionEntry());
     await act(async () => {
@@ -298,85 +236,147 @@ describe("useCreateProductionEntry", () => {
       });
     });
 
-    expect(argsOf(mock.only("crew_members"), "insert")?.[0]).toEqual([
-      { production_entry_id: "entry-7", user_id: "u-1", rate_applied: null },
-      { production_entry_id: "entry-7", user_id: "u-2", rate_applied: null },
+    expect(rpcParams()).toEqual({
+      p_project_id: "project-1",
+      p_crew_id: "crew-1",
+      p_units_completed: 12,
+      p_unit_type: "drilling_ft",
+      p_work_date: "2026-10-31",
+      p_crew_member_ids: ["u-1", "u-2"],
+      p_line_segment_id: undefined,
+      p_notes: undefined,
+    });
+    // One request, and no table write beside it: a crew reporting on
+    // intermittent signal can no longer land an entry whose roster was lost.
+    expect(mock.rpcs).toHaveLength(1);
+    expect(mock.supabase.from).not.toHaveBeenCalled();
+  });
+
+  it("leaves the author and the approval tier to the function", async () => {
+    mock = mockReturning();
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync(entryInput);
+    });
+
+    // `reported_by` / `created_by` come from `auth.uid()` and the
+    // `internal_status: 'reported'` / `billing_status: 'pending'` pair the web
+    // approval queue reads is set server-side. A client that sent them back
+    // would be claiming an authorship the database does not have to believe,
+    // and would need a round trip to read the current user first.
+    expect(Object.keys(rpcParams()).sort()).toEqual([
+      "p_crew_id",
+      "p_crew_member_ids",
+      "p_line_segment_id",
+      "p_notes",
+      "p_project_id",
+      "p_unit_type",
+      "p_units_completed",
+      "p_work_date",
     ]);
   });
 
-  it("propagates an entry insert failure as-is", async () => {
-    mock = createSupabaseMock({
-      tables: {
-        production_entries: { error: new Error("violates check constraint") },
-      },
-    });
+  it("sends project_id, since every RLS policy resolves org through it", async () => {
+    mock = mockReturning();
 
     const { result } = await renderQueryHook(() => useCreateProductionEntry());
-
     await act(async () => {
-      await expect(result.current.mutateAsync(entryInput)).rejects.toThrow(
-        "violates check constraint",
-      );
+      await result.current.mutateAsync(entryInput);
     });
 
+    expect(rpcParams().p_project_id).toBe("project-1");
+  });
+
+  it("sends an empty roster as an empty array, not as a skipped write", async () => {
+    mock = mockReturning();
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync({ ...entryInput, crew_member_ids: [] });
+    });
+
+    // `p_crew_member_ids` is a required argument, so an empty shift still has
+    // to carry it; there is no second request left to skip.
+    expect(rpcParams().p_crew_member_ids).toEqual([]);
     expect(mock.on("crew_members")).toHaveLength(0);
   });
 
-  it("reports a failed roster write as a partial success carrying the entry id", async () => {
-    const cause = new Error("crew_members: permission denied");
-    mock = createSupabaseMock({
-      tables: {
-        production_entries: { data: { id: "entry-7" } },
-        crew_members: { error: cause },
-      },
-    });
+  it.each([
+    ["passes a segment id through", "segment-3", "segment-3"],
+    ["omits a null segment", null, undefined],
+    ["omits an absent segment", undefined, undefined],
+  ])("%s", async (_label, line_segment_id, expected) => {
+    mock = mockReturning();
 
     const { result } = await renderQueryHook(() => useCreateProductionEntry());
-
-    let thrown: unknown;
     await act(async () => {
-      thrown = await result.current.mutateAsync(entryWithMembers()).catch(
-        (error: unknown) => error,
-      );
+      await result.current.mutateAsync({ ...entryInput, line_segment_id });
     });
 
-    // The entry row is already committed. A plain failure would send the user
-    // to retry and bill the client twice for the same day of work.
-    expect(thrown).toBeInstanceOf(ProductionMembersError);
-    const error = thrown as ProductionMembersError;
-    expect(error.name).toBe("ProductionMembersError");
-    expect(error.entryId).toBe("entry-7");
-    expect(error.message).toBe("crew_members: permission denied");
-    expect(error.cause).toBe(cause);
+    // Omitted rather than sent as null: the argument is optional in the
+    // function's signature, and PostgREST drops undefined so the default
+    // applies. An explicit null would be a value the function has to handle.
+    expect(rpcParams().p_line_segment_id).toBe(expected);
   });
 
-  it("falls back to a Spanish message when the roster failure is not an Error", async () => {
-    mock = createSupabaseMock({
-      tables: {
-        production_entries: { data: { id: "entry-7" } },
-        crew_members: { error: { code: "42501" } },
-      },
+  it.each([
+    ["trims surrounding whitespace", "  pozo tapado  ", "pozo tapado"],
+    ["omits whitespace-only notes", "   ", undefined],
+    ["omits an empty note", "", undefined],
+    ["omits an absent note", undefined, undefined],
+  ])("%s", async (_label, notes, expected) => {
+    mock = mockReturning();
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync({ ...entryInput, notes });
     });
+
+    expect(rpcParams().p_notes).toBe(expected);
+  });
+
+  it("returns the committed row the function answered with", async () => {
+    mock = mockReturning({ id: "entry-7", internal_status: "reported" });
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync(entryInput);
+    });
+
+    expect(result.current.data).toEqual({
+      id: "entry-7",
+      internal_status: "reported",
+    });
+    // No `.single()`: the function returns one row, so PostgREST answers with
+    // the object itself and asking for a single row would be a second shape.
+    expect(argsOf(mock.onlyRpc(CREATE_ENTRY), "single")).toBeUndefined();
+  });
+
+  it("propagates the function's error untouched", async () => {
+    // `42501` is both the function's own "Not authenticated" and any RLS
+    // denial, so the database's message is more honest than anything this
+    // layer could substitute for it.
+    const error = {
+      code: "42501",
+      message: "new row violates row-level security policy",
+    };
+    mock = createSupabaseMock({ rpcs: { [CREATE_ENTRY]: { error } } });
 
     const { result } = await renderQueryHook(() => useCreateProductionEntry());
 
     let thrown: unknown;
     await act(async () => {
-      thrown = await result.current.mutateAsync(entryWithMembers()).catch(
-        (error: unknown) => error,
-      );
+      thrown = await result.current
+        .mutateAsync(entryInput)
+        .catch((caught: unknown) => caught);
     });
 
-    expect((thrown as ProductionMembersError).message).toBe(
-      "No se pudieron guardar los integrantes",
-    );
-    expect((thrown as ProductionMembersError).entryId).toBe("entry-7");
+    expect(thrown).toBe(error);
   });
 
   it("invalidates the project's entry list on success", async () => {
-    mock = createSupabaseMock({
-      tables: { production_entries: { data: { id: "entry-1" } } },
-    });
+    mock = mockReturning();
 
     const { result, queryClient } = await renderQueryHook(() =>
       useCreateProductionEntry(),
@@ -392,12 +392,9 @@ describe("useCreateProductionEntry", () => {
     });
   });
 
-  it("invalidates the list on the partial-success path too", async () => {
+  it("invalidates the list on the failure path too", async () => {
     mock = createSupabaseMock({
-      tables: {
-        production_entries: { data: { id: "entry-7" } },
-        crew_members: { error: new Error("nope") },
-      },
+      rpcs: { [CREATE_ENTRY]: { error: new Error("network request failed") } },
     });
 
     const { result, queryClient } = await renderQueryHook(() =>
@@ -406,13 +403,15 @@ describe("useCreateProductionEntry", () => {
     const invalidate = jest.spyOn(queryClient, "invalidateQueries");
 
     await act(async () => {
-      await result.current
-        .mutateAsync(entryWithMembers())
-        .catch(() => undefined);
+      await result.current.mutateAsync(entryInput).catch(() => undefined);
     });
 
-    // onSettled, not onSuccess: the duplicate-entry banner reads this list, so
-    // the one case that most needs the warning is the one that must refresh.
+    // onSettled, not onSuccess. The write is atomic, so a failure never leaves
+    // a half-written entry — but a response lost on the way back still leaves a
+    // COMMITTED entry the app believes failed. The recent-entries list is what
+    // the duplicate-entry banner reads, so the one case that most needs the
+    // warning is the one that must refresh. Keyed off `variables`, since `data`
+    // is undefined here.
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: productionKeys.byProject("project-1"),
     });
@@ -437,7 +436,3 @@ describe("productionKeys", () => {
     );
   });
 });
-
-function entryWithMembers(): CreateProductionEntryInput {
-  return { ...entryInput, crew_member_ids: ["u-1"] };
-}
