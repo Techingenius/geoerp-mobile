@@ -3,7 +3,7 @@
  *
  * `lib/utils/map-bounds` is covered on its own; what this adds is the wiring
  * the unit tests cannot see — that the control is rendered, that pressing it
- * reaches `MapView.mockAnimateToRegion` with the project's region, and that it is
+ * reaches `MapView.animateToRegion` with the project's region, and that it is
  * absent when the project has nothing to frame.
  */
 
@@ -104,7 +104,7 @@ describe("Centrar proyecto", () => {
     const [region] = mockAnimateToRegion.mock.calls[0];
     expect(region.latitude).toBeCloseTo(10.5005, 6);
     expect(region.longitude).toBeCloseTo(-66.8785, 6);
-    // Both spans are below the floor for this project, so both are the floor.
+    // Latitude is floored (0.001 x 1.4 < 0.004); longitude is the padded span.
     expect(region.latitudeDelta).toBeCloseTo(0.004, 6);
     expect(region.longitudeDelta).toBeCloseTo(0.0042, 6);
   });
