@@ -629,6 +629,7 @@ export type Database = {
         Row: {
           created_at: string | null
           id: string
+          payroll_pay_basis: string | null
           payroll_period_id: string | null
           production_entry_id: string
           rate_applied: number | null
@@ -637,6 +638,7 @@ export type Database = {
         Insert: {
           created_at?: string | null
           id?: string
+          payroll_pay_basis?: string | null
           payroll_period_id?: string | null
           production_entry_id: string
           rate_applied?: number | null
@@ -645,6 +647,7 @@ export type Database = {
         Update: {
           created_at?: string | null
           id?: string
+          payroll_pay_basis?: string | null
           payroll_period_id?: string | null
           production_entry_id?: string
           rate_applied?: number | null
@@ -722,6 +725,225 @@ export type Database = {
           },
           {
             foreignKeyName: "crews_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      daily_rate_plan_exclusions: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          effective_from: string
+          effective_to: string | null
+          id: string
+          organization_id: string
+          plan_id: string
+          worker_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          effective_from: string
+          effective_to?: string | null
+          id?: string
+          organization_id: string
+          plan_id: string
+          worker_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          effective_from?: string
+          effective_to?: string | null
+          id?: string
+          organization_id?: string
+          plan_id?: string
+          worker_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "daily_rate_plan_exclusions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_rate_plan_exclusions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_rate_plan_exclusions_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "daily_rate_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_rate_plan_exclusions_worker_id_fkey"
+            columns: ["worker_id"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      daily_rate_plan_tiers: {
+        Row: {
+          id: string
+          organization_id: string
+          rate_above: number
+          threshold_units: number
+          tier_base: number
+          version_id: string
+        }
+        Insert: {
+          id?: string
+          organization_id: string
+          rate_above: number
+          threshold_units: number
+          tier_base: number
+          version_id: string
+        }
+        Update: {
+          id?: string
+          organization_id?: string
+          rate_above?: number
+          threshold_units?: number
+          tier_base?: number
+          version_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "daily_rate_plan_tiers_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_rate_plan_tiers_version_id_fkey"
+            columns: ["version_id"]
+            isOneToOne: false
+            referencedRelation: "daily_rate_plan_versions"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      daily_rate_plan_versions: {
+        Row: {
+          created_at: string
+          created_by: string | null
+          daily_base: number
+          effective_from: string
+          id: string
+          organization_id: string
+          plan_id: string
+        }
+        Insert: {
+          created_at?: string
+          created_by?: string | null
+          daily_base: number
+          effective_from: string
+          id?: string
+          organization_id: string
+          plan_id: string
+        }
+        Update: {
+          created_at?: string
+          created_by?: string | null
+          daily_base?: number
+          effective_from?: string
+          id?: string
+          organization_id?: string
+          plan_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "daily_rate_plan_versions_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_rate_plan_versions_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_rate_plan_versions_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "daily_rate_plans"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      daily_rate_plans: {
+        Row: {
+          budget_line_id: string
+          created_at: string
+          created_by: string | null
+          id: string
+          organization_id: string
+          updated_at: string
+        }
+        Insert: {
+          budget_line_id: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id: string
+          updated_at?: string
+        }
+        Update: {
+          budget_line_id?: string
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          organization_id?: string
+          updated_at?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "daily_rate_plans_budget_line_id_fkey"
+            columns: ["budget_line_id"]
+            isOneToOne: true
+            referencedRelation: "budget_lines_without_wave_product"
+            referencedColumns: ["budget_line_id"]
+          },
+          {
+            foreignKeyName: "daily_rate_plans_budget_line_id_fkey"
+            columns: ["budget_line_id"]
+            isOneToOne: true
+            referencedRelation: "production_entry_pricing"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_rate_plans_budget_line_id_fkey"
+            columns: ["budget_line_id"]
+            isOneToOne: true
+            referencedRelation: "project_budgets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_rate_plans_created_by_fkey"
+            columns: ["created_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "daily_rate_plans_organization_id_fkey"
             columns: ["organization_id"]
             isOneToOne: false
             referencedRelation: "organizations"
@@ -1897,6 +2119,149 @@ export type Database = {
           },
         ]
       }
+      payroll_daily_pay: {
+        Row: {
+          amount: number
+          base: number
+          basis: string
+          budget_line_id: string
+          created_at: string
+          entitlement: number
+          id: string
+          organization_id: string
+          period_id: string
+          plan_id: string
+          plan_snapshot: Json
+          previously_paid: number
+          project_id: string
+          rate_above: number
+          threshold_units: number | null
+          unit_type: string | null
+          units: number
+          units_above: number
+          version_id: string
+          work_date: string
+          worker_id: string
+        }
+        Insert: {
+          amount: number
+          base: number
+          basis: string
+          budget_line_id: string
+          created_at?: string
+          entitlement: number
+          id?: string
+          organization_id: string
+          period_id: string
+          plan_id: string
+          plan_snapshot: Json
+          previously_paid: number
+          project_id: string
+          rate_above?: number
+          threshold_units?: number | null
+          unit_type?: string | null
+          units: number
+          units_above?: number
+          version_id: string
+          work_date: string
+          worker_id: string
+        }
+        Update: {
+          amount?: number
+          base?: number
+          basis?: string
+          budget_line_id?: string
+          created_at?: string
+          entitlement?: number
+          id?: string
+          organization_id?: string
+          period_id?: string
+          plan_id?: string
+          plan_snapshot?: Json
+          previously_paid?: number
+          project_id?: string
+          rate_above?: number
+          threshold_units?: number | null
+          unit_type?: string | null
+          units?: number
+          units_above?: number
+          version_id?: string
+          work_date?: string
+          worker_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "payroll_daily_pay_budget_line_id_fkey"
+            columns: ["budget_line_id"]
+            isOneToOne: false
+            referencedRelation: "budget_lines_without_wave_product"
+            referencedColumns: ["budget_line_id"]
+          },
+          {
+            foreignKeyName: "payroll_daily_pay_budget_line_id_fkey"
+            columns: ["budget_line_id"]
+            isOneToOne: false
+            referencedRelation: "production_entry_pricing"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_daily_pay_budget_line_id_fkey"
+            columns: ["budget_line_id"]
+            isOneToOne: false
+            referencedRelation: "project_budgets"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_daily_pay_organization_id_fkey"
+            columns: ["organization_id"]
+            isOneToOne: false
+            referencedRelation: "organizations"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_daily_pay_period_id_fkey"
+            columns: ["period_id"]
+            isOneToOne: false
+            referencedRelation: "payroll_periods"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_daily_pay_plan_id_fkey"
+            columns: ["plan_id"]
+            isOneToOne: false
+            referencedRelation: "daily_rate_plans"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_daily_pay_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "budget_lines_without_wave_product"
+            referencedColumns: ["project_id"]
+          },
+          {
+            foreignKeyName: "payroll_daily_pay_project_id_fkey"
+            columns: ["project_id"]
+            isOneToOne: false
+            referencedRelation: "projects"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_daily_pay_version_id_fkey"
+            columns: ["version_id"]
+            isOneToOne: false
+            referencedRelation: "daily_rate_plan_versions"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "payroll_daily_pay_worker_id_fkey"
+            columns: ["worker_id"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       payroll_period_settings: {
         Row: {
           anchor_date: string | null
@@ -1952,6 +2317,7 @@ export type Database = {
         Row: {
           advances_deducted: number
           created_at: string
+          daily_pay: number
           gross: number
           hourly_pay: number
           id: string
@@ -1971,6 +2337,7 @@ export type Database = {
         Insert: {
           advances_deducted?: number
           created_at?: string
+          daily_pay?: number
           gross?: number
           hourly_pay?: number
           id?: string
@@ -1990,6 +2357,7 @@ export type Database = {
         Update: {
           advances_deducted?: number
           created_at?: string
+          daily_pay?: number
           gross?: number
           hourly_pay?: number
           id?: string
@@ -2388,6 +2756,51 @@ export type Database = {
             columns: ["supervisor_approved_by"]
             isOneToOne: false
             referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
+      production_entry_history: {
+        Row: {
+          action: string
+          actor_id: string | null
+          created_at: string
+          id: string
+          production_entry_id: string
+          reason: string | null
+          snapshot: Json
+        }
+        Insert: {
+          action: string
+          actor_id?: string | null
+          created_at?: string
+          id?: string
+          production_entry_id: string
+          reason?: string | null
+          snapshot: Json
+        }
+        Update: {
+          action?: string
+          actor_id?: string | null
+          created_at?: string
+          id?: string
+          production_entry_id?: string
+          reason?: string | null
+          snapshot?: Json
+        }
+        Relationships: [
+          {
+            foreignKeyName: "production_entry_history_actor_id_fkey"
+            columns: ["actor_id"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "production_entry_history_production_entry_id_fkey"
+            columns: ["production_entry_id"]
+            isOneToOne: false
+            referencedRelation: "production_entries"
             referencedColumns: ["id"]
           },
         ]
@@ -3388,6 +3801,7 @@ export type Database = {
           hours_worked: number | null
           id: string
           notes: string | null
+          payroll_pay_basis: string | null
           payroll_period_id: string | null
           project_id: string
           rejection_reason: string | null
@@ -3410,6 +3824,7 @@ export type Database = {
           hours_worked?: number | null
           id?: string
           notes?: string | null
+          payroll_pay_basis?: string | null
           payroll_period_id?: string | null
           project_id: string
           rejection_reason?: string | null
@@ -3432,6 +3847,7 @@ export type Database = {
           hours_worked?: number | null
           id?: string
           notes?: string | null
+          payroll_pay_basis?: string | null
           payroll_period_id?: string | null
           project_id?: string
           rejection_reason?: string | null
@@ -3991,6 +4407,28 @@ export type Database = {
         Returns: Database["public"]["Tables"]["production_entries"]["Row"]
       }
       current_user_org: { Args: never; Returns: string }
+      daily_rate_amount: {
+        Args: { p_daily_base: number; p_tiers: Json; p_units: number }
+        Returns: number
+      }
+      daily_rate_plan_excludes: {
+        Args: { p_date: string; p_plan_id: string; p_worker_id: string }
+        Returns: boolean
+      }
+      daily_rate_plan_for: {
+        Args: { p_budget_line_id: string; p_date: string }
+        Returns: {
+          daily_base: number
+          effective_from: string
+          plan_id: string
+          tiers: Json
+          version_id: string
+        }[]
+      }
+      daily_rate_plan_locked_through: {
+        Args: { p_org: string }
+        Returns: string
+      }
       generate_maintenance_alerts: {
         Args: { p_default_lead_days?: number }
         Returns: {
@@ -4015,6 +4453,7 @@ export type Database = {
         Args: { p_org_id: string; p_period_end: string; p_period_start: string }
         Returns: Json
       }
+      get_daily_rate_plans: { Args: { p_project_id: string }; Returns: Json }
       get_dso: { Args: { p_months?: number; p_org_id: string }; Returns: Json }
       get_expense_summary: {
         Args: { p_org_id: string; p_period_end: string; p_period_start: string }
@@ -4124,6 +4563,20 @@ export type Database = {
         Args: { p_dry_run?: boolean; p_rows: Json; p_source: string }
         Returns: Json
       }
+      labour_cost_rows: {
+        Args: { p_from: string; p_org: string; p_to: string }
+        Returns: {
+          amount: number
+          kind: string
+          pay_basis: string
+          project_id: string
+          source_id: string
+          units: number
+          unrated: boolean
+          work_date: string
+          worker_id: string
+        }[]
+      }
       lookup_worker_hourly_rate: {
         Args: { p_project_id: string; p_user_id: string; p_work_date: string }
         Returns: number
@@ -4142,6 +4595,28 @@ export type Database = {
         Returns: Json
       }
       open_payroll_period: { Args: { p_date: string }; Returns: string }
+      payroll_daily_days_live: {
+        Args: { p_from: string; p_org: string; p_to: string }
+        Returns: {
+          amount: number
+          base: number
+          basis: string
+          budget_line_id: string
+          entitlement: number
+          plan_id: string
+          plan_snapshot: Json
+          previously_paid: number
+          project_id: string
+          rate_above: number
+          threshold_units: number
+          unit_type: string
+          units: number
+          units_above: number
+          version_id: string
+          work_date: string
+          worker_id: string
+        }[]
+      }
       payroll_period_bounds: {
         Args: { p_date: string; p_org: string }
         Returns: Record<string, unknown>
@@ -4160,6 +4635,33 @@ export type Database = {
         Args: { p_date: string; p_org: string }
         Returns: Record<string, unknown>
       }
+      payroll_period_daily_days: {
+        Args: { p_period_id: string }
+        Returns: {
+          amount: number
+          base: number
+          basis: string
+          budget_line_id: string
+          carried_over: boolean
+          entitlement: number
+          plan_id: string
+          plan_snapshot: Json
+          previously_paid: number
+          project_id: string
+          rate_above: number
+          threshold_units: number
+          unit_type: string
+          units: number
+          units_above: number
+          version_id: string
+          work_date: string
+          worker_id: string
+        }[]
+      }
+      payroll_period_window: {
+        Args: { p_date: string; p_org: string }
+        Returns: Record<string, unknown>
+      }
       project_budget_line_labels: {
         Args: { p_project_id: string }
         Returns: {
@@ -4173,6 +4675,16 @@ export type Database = {
       }
       reconcile_wave_export: {
         Args: { p_dry_run?: boolean; p_external_ids: string[] }
+        Returns: Json
+      }
+      set_daily_rate_plan: {
+        Args: {
+          p_budget_line_id: string
+          p_daily_base: number
+          p_effective_from: string
+          p_exclusions?: Json
+          p_tiers?: Json
+        }
         Returns: Json
       }
       set_payroll_period_settings: {

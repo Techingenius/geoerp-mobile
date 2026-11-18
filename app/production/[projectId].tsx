@@ -372,7 +372,7 @@ export default function ProductionEntryScreen() {
     // reporter can act on without losing what they typed.
     if (activities.length > 0 && !values.budget_line_id) {
       setError("budget_line_id", {
-        message: "Elegí la actividad que estás reportando",
+        message: "Elige la actividad que estás reportando",
       });
       onInvalid();
       return;
@@ -427,6 +427,9 @@ export default function ProductionEntryScreen() {
         "El reporte quedó en estado Reportado, pendiente de aprobación del supervisor.",
       );
     } catch (error) {
+      // The entry and its roster are one transaction (GRA-832), so a failure
+      // here wrote nothing: every branch below can ask for a correction and
+      // let the reporter send the same form again.
       switch (classifyPlanRejection(error)) {
         case "overproduction_reason_required":
           // The remaining quantity moved under us. Nothing was written —
@@ -439,16 +442,16 @@ export default function ProductionEntryScreen() {
           onInvalid();
           Alert.alert(
             "Falta el motivo",
-            "Entre que abriste la pantalla y enviaste, alguien más reportó sobre esta actividad y tu cantidad ya pasa de lo planeado. Escribí el motivo y volvé a enviar.",
+            "Entre que abriste la pantalla y enviaste, alguien más reportó sobre esta actividad y tu cantidad ya pasa de lo planeado. Escribe el motivo y vuelve a enviar.",
           );
           return;
         case "activity_required":
           setError("budget_line_id", {
-            message: "Elegí la actividad que estás reportando",
+            message: "Elige la actividad que estás reportando",
           });
           onInvalid();
           Alert.alert(
-            "Elegí la actividad",
+            "Elige la actividad",
             "Este tramo tiene más de una actividad con esta unidad, así que hay que decir cuál se está reportando.",
           );
           return;
@@ -459,7 +462,7 @@ export default function ProductionEntryScreen() {
           onInvalid();
           Alert.alert(
             "La actividad no es de este tramo",
-            "El plan del tramo cambió. Desliza para actualizar y elegí una de sus actividades.",
+            "El plan del tramo cambió. Desliza para actualizar y elige una de sus actividades.",
           );
           return;
         default:

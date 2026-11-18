@@ -436,8 +436,8 @@ export default function MySegmentsScreen() {
               Sin tramos asignados
             </Text>
             <Text className="text-sm text-gray-500 text-center mt-1">
-              Cuando tu supervisor te asigne un tramo de este proyecto va a
-              aparecer acá.
+              Cuando tu supervisor te asigne un tramo de este proyecto
+              aparecerá aquí.
             </Text>
           </View>
         }

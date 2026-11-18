@@ -1,12 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../supabase/client";
-import type { ProductionEntry, UnitType } from "../../types/database";
 import { segmentKeys } from "./segments";
+import type {
+  Crew,
+  ProductionEntry,
+  UnitType,
+} from "../../types/database";
 
 export const productionKeys = {
   all: ["production-entries"] as const,
   byProject: (projectId: string) =>
     ["production-entries", "project", projectId] as const,
+  activeCrews: ["crews", "active"] as const,
   crewDefaultMembers: (crewId: string) =>
     ["crew-default-members", crewId] as const,
 };
@@ -20,6 +25,27 @@ export interface CrewMemberOption {
 export interface ProductionEntryWithNames extends ProductionEntry {
   crew?: { name: string } | null;
   reported_by_user?: { full_name: string | null } | null;
+}
+
+/**
+ * Active crews in the caller's organization.
+ * RLS (`crews.organization_id = current_user_org()`) does the org scoping, so
+ * no organization_id filter is needed — nor would one be trustworthy here.
+ */
+export function useActiveCrews() {
+  return useQuery({
+    queryKey: productionKeys.activeCrews,
+    queryFn: async (): Promise<Crew[]> => {
+      const { data, error } = await supabase
+        .from("crews")
+        .select("*")
+        .eq("is_active", true)
+        .order("name");
+
+      if (error) throw error;
+      return data ?? [];
+    },
+  });
 }
 
 /**
@@ -92,7 +118,7 @@ export interface CreateProductionEntryInput {
   /** Work date as `YYYY-MM-DD`; the column is a DATE, not a timestamp. */
   work_date: string;
   notes?: string | null;
-  /** Why this entry takes the activity past its planned quantity. */
+  /** Why this entry takes the activity past its planned quantity (GRA-831). */
   overproduction_reason?: string | null;
   /** Workers who actually worked the shift; may be empty. */
   crew_member_ids: string[];
@@ -115,10 +141,10 @@ const CHECK_VIOLATION = "23514";
 /**
  * Which plan rule, if any, rejected this entry.
  *
- * The mobile form asks for a reason itself whenever the quantity goes past
- * what the activity has left, so reaching the overproduction branch means the
- * remaining quantity moved underneath us — another crew reported on the same
- * activity between the screen loading and the send.
+ * The form asks for a reason itself whenever the quantity goes past what the
+ * activity has left, so reaching the overproduction branch means the remaining
+ * quantity moved underneath us — another crew reported on the same activity
+ * between the screen loading and the send.
  */
 export function classifyPlanRejection(
   error: unknown,
@@ -149,53 +175,80 @@ function isPostgrestError(
 /**
  * Create a production entry at the first tier of the approval workflow.
  *
- * One RPC, one transaction (GRA-766): the entry and its `crew_members` rows
- * commit together, so a failed call leaves nothing behind and is safe to
- * retry. The two-step insert this replaced could commit the entry and lose
- * the roster, which put a billable entry in the approval queue that the
- * reporter was told had failed.
+ * One `create_production_entry` call writes the entry AND its `crew_members`
+ * in a single transaction (GRA-766, GRA-832). It replaces the two-step insert
+ * this hook used to do, where losing signal between the two requests left a
+ * committed entry with no roster — the expected case here, not the edge, since
+ * crews report from the field on intermittent signal.
  *
- * `create_production_entry` is SECURITY INVOKER, so the same RLS decides who
- * may write: admins and supervisors, and crew leads or standing members of
- * the crew they report for (GRA-767). `internal_status` and `billing_status`
- * are set by the function, not by the caller.
+ * The RPC is `SECURITY INVOKER`, so the RLS policies of `production_entries`
+ * and `crew_members` apply exactly as they did to the direct inserts, and the
+ * `production_entries` triggers hold the entry to the segment's activities and
+ * plan. It also fills `reported_by` / `created_by` from `auth.uid()` and sets
+ * `internal_status: 'reported'` / `billing_status: 'pending'` server-side, so
+ * the client no longer sends them — nor does it need a round trip to read the
+ * current user first. Web (`apps/web/src/hooks/use-production.ts`) and the
+ * `daily-report` Edge Function go through the same function.
  */
 export function useCreateProductionEntry() {
   const queryClient = useQueryClient();
 
   return useMutation({
     mutationFn: async (input: CreateProductionEntryInput) => {
+      // Local read from AsyncStorage, not a round trip like `getUser()`. Only
+      // to keep the "no session" case in the app's language: without it the
+      // call goes out as anon and comes back as a bare permission-denied.
+      const {
+        data: { session },
+      } = await supabase.auth.getSession();
+
+      if (!session) throw new Error("No hay sesión activa");
+
       const notes = input.notes?.trim();
       const reason = input.overproduction_reason?.trim();
 
-      // Optional RPC arguments are typed as present-or-absent, not nullable:
-      // an explicit null is not the same as letting the parameter default.
-      const { data, error } = await supabase.rpc("create_production_entry", {
-        p_project_id: input.project_id,
-        p_crew_id: input.crew_id,
-        p_units_completed: input.units_completed,
-        p_unit_type: input.unit_type,
-        p_work_date: input.work_date,
-        p_crew_member_ids: input.crew_member_ids,
-        ...(input.line_segment_id
-          ? { p_line_segment_id: input.line_segment_id }
-          : {}),
-        ...(input.budget_line_id
-          ? { p_budget_line_id: input.budget_line_id }
-          : {}),
-        ...(notes ? { p_notes: notes } : {}),
-        ...(reason ? { p_overproduction_reason: reason } : {}),
-      });
+      // No `.single()`: the function returns one `production_entries` row, so
+      // PostgREST answers with the object itself. Same call shape as web and
+      // the `daily-report` Edge Function.
+      const { data: entry, error } = await supabase.rpc(
+        "create_production_entry",
+        {
+          p_project_id: input.project_id,
+          p_crew_id: input.crew_id,
+          p_units_completed: input.units_completed,
+          p_unit_type: input.unit_type,
+          p_work_date: input.work_date,
+          p_crew_member_ids: input.crew_member_ids,
+          p_line_segment_id: input.line_segment_id ?? undefined,
+          p_notes: notes ? notes : undefined,
+          // GRA-831. Optional RPC arguments are typed as present-or-absent,
+          // not nullable: an explicit null is not the same as letting the
+          // parameter default.
+          p_budget_line_id: input.budget_line_id ?? undefined,
+          p_overproduction_reason: reason ? reason : undefined,
+        },
+      );
 
+      // Not special-cased by code: `42501` is both the RPC's own
+      // "Not authenticated" and any RLS denial, so the database's message is
+      // more honest than anything this layer could substitute for it.
       if (error) throw error;
-      return data as unknown as ProductionEntry;
+
+      return entry as ProductionEntry;
     },
-    onSuccess: (_entry, variables) => {
+    // onSettled, not onSuccess. The write is atomic now, so a failure never
+    // leaves a half-written entry — but a response lost on the way back still
+    // leaves a COMMITTED entry the app believes failed. The recent-entries
+    // list is what the duplicate-entry banner reads, so refreshing it on both
+    // paths is what gives the reporter a chance to see the entry that did land
+    // instead of reporting it twice. Keyed off `variables` because `data` is
+    // undefined on the error path.
+    onSettled: (_entry, _error, variables) => {
       queryClient.invalidateQueries({
         queryKey: productionKeys.byProject(variables.project_id),
       });
       // The entry changes what the activity has left to report, which is the
-      // suggested quantity on the next one.
+      // suggested quantity on the next one (GRA-831).
       queryClient.invalidateQueries({ queryKey: segmentKeys.all });
     },
   });
