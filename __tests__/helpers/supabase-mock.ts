@@ -45,7 +45,20 @@ export interface RecordedUpload {
   bucket: string;
   path: string;
   body: unknown;
-  options?: { contentType?: string };
+  options?: { contentType?: string; upsert?: boolean };
+}
+
+/** One `storage.from(b).remove([...])` call. */
+export interface RecordedRemoval {
+  bucket: string;
+  paths: string[];
+}
+
+/** One `storage.from(b).createSignedUrls(paths, ttl)` call. */
+export interface RecordedSigning {
+  bucket: string;
+  paths: string[];
+  expiresIn: number;
 }
 
 export interface SupabaseMockOptions {
@@ -60,6 +73,13 @@ export interface SupabaseMockOptions {
   rpcs?: Record<string, PostgrestResult | PostgrestResult[]>;
   /** Per-bucket `upload()` results, consumed in call order. */
   uploads?: Record<string, PostgrestResult | PostgrestResult[]>;
+  /** Per-bucket `remove()` results, consumed in call order. */
+  removals?: Record<string, PostgrestResult | PostgrestResult[]>;
+  /**
+   * Per-bucket `createSignedUrls()` results. Unqueued, every requested path
+   * is signed — the common case, and one a test should not have to spell out.
+   */
+  signedUrls?: Record<string, PostgrestResult | PostgrestResult[]>;
   /** What `getPublicUrl()` returns, regardless of path. */
   publicUrl?: string;
 }
@@ -76,6 +96,10 @@ export interface SupabaseMock {
   /** Every `rpc()` call, in call order. */
   rpcs: RecordedRpc[];
   uploads: RecordedUpload[];
+  /** Every `remove()` call, in call order. */
+  removals: RecordedRemoval[];
+  /** Every `createSignedUrls()` call, in call order. */
+  signings: RecordedSigning[];
   /** Queries against one table, oldest first. */
   on(table: string): RecordedQuery[];
   /** The single query against one table; throws unless there is exactly one. */
@@ -140,9 +164,13 @@ export function createSupabaseMock(
   const queries: RecordedQuery[] = [];
   const rpcs: RecordedRpc[] = [];
   const uploads: RecordedUpload[] = [];
+  const removals: RecordedRemoval[] = [];
+  const signings: RecordedSigning[] = [];
   const consumedTables: Record<string, number> = {};
   const consumedRpcs: Record<string, number> = {};
   const consumedUploads: Record<string, number> = {};
+  const consumedRemovals: Record<string, number> = {};
+  const consumedSignings: Record<string, number> = {};
 
   function makeChain(
     chain: ChainLink[],
@@ -211,7 +239,7 @@ export function createSupabaseMock(
       async (
         path: string,
         body: unknown,
-        uploadOptions?: { contentType?: string },
+        uploadOptions?: { contentType?: string; upsert?: boolean },
       ) => {
         uploads.push({ bucket, path, body, options: uploadOptions });
         return {
@@ -221,6 +249,38 @@ export function createSupabaseMock(
         };
       },
     ),
+    // Returns a thenable with `.catch`, not a bare promise object: the upload
+    // hook calls `.catch()` on its best-effort cleanup removal, and a plain
+    // object with a `then` would blow up there instead of being swallowed.
+    remove: jest.fn((paths: string[]) => {
+      removals.push({ bucket, paths });
+      return Promise.resolve({
+        data: null,
+        error: null,
+        ...takeNext("removal", bucket, options.removals, consumedRemovals),
+      });
+    }),
+    createSignedUrls: jest.fn(async (paths: string[], expiresIn: number) => {
+      signings.push({ bucket, paths, expiresIn });
+
+      const queued = options.signedUrls?.[bucket];
+      if (queued !== undefined) {
+        return {
+          data: null,
+          error: null,
+          ...takeNext("signed url", bucket, options.signedUrls, consumedSignings),
+        };
+      }
+
+      return {
+        data: paths.map((path) => ({
+          path,
+          signedUrl: `https://cdn.test/signed/${bucket}/${path}`,
+          error: null,
+        })),
+        error: null,
+      };
+    }),
     getPublicUrl: jest.fn((path: string) => ({
       data: {
         publicUrl:
@@ -243,6 +303,8 @@ export function createSupabaseMock(
     queries,
     rpcs,
     uploads,
+    removals,
+    signings,
     on,
     only(table: string) {
       const matches = on(table);
