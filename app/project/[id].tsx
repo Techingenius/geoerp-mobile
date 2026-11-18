@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -28,6 +28,7 @@ import {
   getPhotoUrl,
 } from "../../lib/api/services";
 import { useLocation } from "../../lib/hooks/use-location";
+import { projectMapRegion } from "../../lib/utils/map-bounds";
 import type { Service, ServiceStatus } from "../../types/database";
 
 const SERVICE_STATUS_COLORS: Record<ServiceStatus, string> = {
@@ -142,6 +143,25 @@ export default function ProjectDetailScreen() {
   const [statusNotes, setStatusNotes] = useState("");
 
   const { data: servicePhotos } = useServicePhotos(selectedService?.id);
+
+  // Map control (GRA-1140). The map opens on the operator's own position, which
+  // is what a trinchero standing on the line wants; this is the way back to the
+  // work when the project is somewhere else, or when panning has lost it.
+  const mapRef = useRef<MapView | null>(null);
+
+  // `projects` has no geometry column, so the project's center is derived from
+  // what it covers: its segments and its services. No geometry, no region, and
+  // the control is not rendered — a button that cannot do anything is worse
+  // than no button in the field.
+  const projectRegion = useMemo(
+    () => projectMapRegion(segments, services),
+    [segments, services]
+  );
+
+  const centerOnProject = useCallback(() => {
+    if (!projectRegion) return;
+    mapRef.current?.animateToRegion(projectRegion, 450);
+  }, [projectRegion]);
 
   if (loadingProject) {
     return (
@@ -409,6 +429,7 @@ export default function ProjectDetailScreen() {
         }}
       />
       <MapView
+        ref={mapRef}
         style={StyleSheet.absoluteFill}
         initialRegion={initialRegion}
         showsUserLocation
@@ -453,46 +474,73 @@ export default function ProjectDetailScreen() {
         })}
       </MapView>
 
-      {/* Bottom info bar */}
-      <View className="absolute bottom-0 left-0 right-0 bg-white border-t border-gray-200 px-4 py-3 pb-8">
-        <View className="flex-row items-center justify-between mb-2 gap-3">
-          {/* flex-1 + numberOfLines: flexShrink is 0 by default in RN, so
-              without this a long project name keeps its natural width and
-              pushes "Servicio" off the viewport. Real seed names already do
-              this — "Zona Industrial - Troncal Norte Fase 2" is 40 chars. */}
-          <View className="flex-1">
-            <Text className="font-semibold text-gray-900" numberOfLines={1}>
-              {project.name}
-            </Text>
-            <Text
-              className={`text-xs ${servicesError ? "text-red-500" : "text-gray-400"}`}
-              numberOfLines={1}
+      {/* Map overlay: controls stacked on top of the info bar. Keeping both in
+          one bottom-anchored column means the control floats just above the bar
+          whatever height the bar ends up with, instead of hard-coding an offset
+          that a second legend row would break. `box-none` leaves the empty
+          space in the control row transparent, so a drag there still pans the
+          map. */}
+      <View className="absolute bottom-0 left-0 right-0" pointerEvents="box-none">
+        {/* Hidden while the project has no segments and no services: there is
+            no center to go to, and a dead control costs a tap to discover. */}
+        {projectRegion && (
+          <View className="items-end px-4 pb-3" pointerEvents="box-none">
+            <Pressable
+              onPress={centerOnProject}
+              accessibilityRole="button"
+              accessibilityLabel="Centrar el mapa en el proyecto"
+              hitSlop={8}
+              className="flex-row items-center bg-white border border-gray-300 rounded-full pl-3.5 pr-4 py-3.5 shadow-md active:bg-gray-100"
             >
-              {servicesError ? "Error cargando servicios" : `${services?.length ?? 0} servicios`} · {segments?.length ?? 0} tramos
-            </Text>
+              <Ionicons name="scan-outline" size={20} color="#2563eb" />
+              <Text className="text-gray-900 font-semibold ml-2">
+                Centrar proyecto
+              </Text>
+            </Pressable>
           </View>
-          <Pressable
-            onPress={() => setShowAddService(true)}
-            className="bg-primary-600 flex-row items-center px-4 py-2.5 rounded-xl active:bg-primary-700 shrink-0"
-          >
-            <Ionicons name="add" size={18} color="white" />
-            <Text className="text-white font-medium ml-1">Servicio</Text>
-          </Pressable>
-        </View>
+        )}
 
-        {/* Status legend */}
-        <View className="flex-row gap-3 mt-1">
-          {Object.entries(SERVICE_STATUS_COLORS).map(([status, color]) => (
-            <View key={status} className="flex-row items-center gap-1">
-              <View
-                style={{ backgroundColor: color }}
-                className="w-2.5 h-2.5 rounded-full"
-              />
-              <Text className="text-xs text-gray-400">
-                {SERVICE_STATUS_LABELS[status as ServiceStatus] ?? status}
+        {/* Bottom info bar */}
+        <View className="bg-white border-t border-gray-200 px-4 py-3 pb-8">
+          <View className="flex-row items-center justify-between mb-2 gap-3">
+            {/* flex-1 + numberOfLines: flexShrink is 0 by default in RN, so
+                without this a long project name keeps its natural width and
+                pushes "Servicio" off the viewport. Real seed names already do
+                this — "Zona Industrial - Troncal Norte Fase 2" is 40 chars. */}
+            <View className="flex-1">
+              <Text className="font-semibold text-gray-900" numberOfLines={1}>
+                {project.name}
+              </Text>
+              <Text
+                className={`text-xs ${servicesError ? "text-red-500" : "text-gray-400"}`}
+                numberOfLines={1}
+              >
+                {servicesError ? "Error cargando servicios" : `${services?.length ?? 0} servicios`} · {segments?.length ?? 0} tramos
               </Text>
             </View>
-          ))}
+            <Pressable
+              onPress={() => setShowAddService(true)}
+              className="bg-primary-600 flex-row items-center px-4 py-2.5 rounded-xl active:bg-primary-700 shrink-0"
+            >
+              <Ionicons name="add" size={18} color="white" />
+              <Text className="text-white font-medium ml-1">Servicio</Text>
+            </Pressable>
+          </View>
+
+          {/* Status legend */}
+          <View className="flex-row gap-3 mt-1">
+            {Object.entries(SERVICE_STATUS_COLORS).map(([status, color]) => (
+              <View key={status} className="flex-row items-center gap-1">
+                <View
+                  style={{ backgroundColor: color }}
+                  className="w-2.5 h-2.5 rounded-full"
+                />
+                <Text className="text-xs text-gray-400">
+                  {SERVICE_STATUS_LABELS[status as ServiceStatus] ?? status}
+                </Text>
+              </View>
+            ))}
+          </View>
         </View>
       </View>
 
