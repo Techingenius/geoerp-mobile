@@ -70,3 +70,5 @@ jobs:
 
       - name: Run unit tests
         run: npm test -- --ci
+
+# GRA-976 smoke test: este PR no se mergea.
