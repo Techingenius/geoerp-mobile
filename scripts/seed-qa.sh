@@ -33,12 +33,24 @@
 #
 #   90000000-…  organization        95000000-…  services
 #   91000000-…  users               96000000-…  pre-existing damages
-#   92000000-…  client              97000000-…  crew
-#   93000000-…  project
-#   94000000-…  line segments
+#   92000000-…  client              97000000-…  crews
+#   93000000-…  project              98000000-…  Wave products
+#   94000000-…  line segments        98100000-…  budget lines
+#                                    99000000-…  segment activities
 #
 # QA lives in its own organization, so RLS (`current_user_org()`) keeps the
 # demo dataset out of the QA user's view and the counts stay deterministic.
+#
+# WHAT THE SEGMENT FIXTURES ARE FOR (GRA-829). The three segments are not
+# interchangeable, and changing one breaks a case the mobile QA script walks:
+#
+#   qa-Tramo 1  assigned to qa-Cuadrilla Movil, two planned activities
+#               (one per foot, one per unit) → "mis tramos", the activity
+#               picker, the suggested quantity and the overproduction prompt
+#   qa-Tramo 2  assigned to the same crew, NO activities → the segment nobody
+#               planned still reports, picking the unit by hand
+#   qa-Tramo 3  assigned to qa-Cuadrilla Ajena → a crew lead must NOT see it,
+#               and a supervisor must
 #
 # TARGET. Defaults to the local stack at http://127.0.0.1:54321 and refuses
 # geoerp production outright. geoerp has no staging project today — the mobile
@@ -207,13 +219,31 @@ QA_CLIENT="92000000-0000-0000-0000-000000000001"
 QA_PROJECT="93000000-0000-0000-0000-000000000001"
 QA_SEGMENT_1="94000000-0000-0000-0000-000000000001"
 QA_SEGMENT_2="94000000-0000-0000-0000-000000000002"
+QA_SEGMENT_3="94000000-0000-0000-0000-000000000003"
 QA_CREW="97000000-0000-0000-0000-000000000001"
+QA_CREW_OTHER="97000000-0000-0000-0000-000000000002"
+QA_SUPERVISOR="91000000-0000-0000-0000-000000000003"
+QA_WAVE_FT="98000000-0000-0000-0000-000000000001"
+QA_WAVE_UNIT="98000000-0000-0000-0000-000000000002"
+QA_BUDGET_FT="98100000-0000-0000-0000-000000000001"
+QA_BUDGET_UNIT="98100000-0000-0000-0000-000000000002"
+QA_ACTIVITY_FT="99000000-0000-0000-0000-000000000001"
+QA_ACTIVITY_UNIT="99000000-0000-0000-0000-000000000002"
 
 QA_OPERATOR_EMAIL="qa-operador@geoerp.local"
 QA_TRINCHERO_EMAIL="qa-trinchero@geoerp.local"
+QA_SUPERVISOR_EMAIL="qa-supervisor@geoerp.local"
+
+# The plan is for today, so a crew lead opening the app sees today's work
+# instead of something stale. Upserts, so a run tomorrow moves the date rather
+# than adding a row.
+QA_PLANNED_DATE="$(date +%F)"
 
 FIXTURE_SERVICES="95000000-0000-0000-0000-000000000001,95000000-0000-0000-0000-000000000002,95000000-0000-0000-0000-000000000003,95000000-0000-0000-0000-000000000004,95000000-0000-0000-0000-000000000005,95000000-0000-0000-0000-000000000006"
-FIXTURE_SEGMENTS="${QA_SEGMENT_1},${QA_SEGMENT_2}"
+FIXTURE_SEGMENTS="${QA_SEGMENT_1},${QA_SEGMENT_2},${QA_SEGMENT_3}"
+FIXTURE_ACTIVITIES="${QA_ACTIVITY_FT},${QA_ACTIVITY_UNIT}"
+FIXTURE_BUDGET_LINES="${QA_BUDGET_FT},${QA_BUDGET_UNIT}"
+FIXTURE_WAVE_PRODUCTS="${QA_WAVE_FT},${QA_WAVE_UNIT}"
 FIXTURE_DAMAGES="96000000-0000-0000-0000-000000000001"
 
 # ── 0. Prune the QA organization back to the fixture set ────────────────────
@@ -228,12 +258,16 @@ FIXTURE_DAMAGES="96000000-0000-0000-0000-000000000001"
 # the crew, projects, client, users and the organization itself.
 if [[ "$TEARDOWN" == 1 ]]; then
   KEEP_SERVICES=""; KEEP_SEGMENTS=""; KEEP_DAMAGES=""; KEEP_PROJECTS=""
+  KEEP_ACTIVITIES=""; KEEP_BUDGET_LINES=""; KEEP_WAVE_PRODUCTS=""
   echo "Teardown — removing the QA dataset from $API_URL..."
 else
   KEEP_SERVICES="&id=not.in.(${FIXTURE_SERVICES})"
   KEEP_SEGMENTS="&id=not.in.(${FIXTURE_SEGMENTS})"
   KEEP_DAMAGES="&id=not.in.(${FIXTURE_DAMAGES})"
   KEEP_PROJECTS="&id=not.in.(${QA_PROJECT})"
+  KEEP_ACTIVITIES="&id=not.in.(${FIXTURE_ACTIVITIES})"
+  KEEP_BUDGET_LINES="&id=not.in.(${FIXTURE_BUDGET_LINES})"
+  KEEP_WAVE_PRODUCTS="&id=not.in.(${FIXTURE_WAVE_PRODUCTS})"
   echo "Pruning the QA organization back to the fixture set..."
 fi
 
@@ -273,17 +307,23 @@ if [[ -n "$QA_PROJECT_IDS" ]]; then
   QA_SEGMENT_IDS="$(id_list "/rest/v1/line_segments?select=id&project_id=in.(${QA_PROJECT_IDS})")"
   if [[ -n "$QA_SEGMENT_IDS" ]]; then
     prune segment_photos "/rest/v1/segment_photos?segment_id=in.(${QA_SEGMENT_IDS})"
-    prune segment_activities "/rest/v1/line_segment_activities?line_segment_id=in.(${QA_SEGMENT_IDS})"
+    prune segment_activities "/rest/v1/line_segment_activities?line_segment_id=in.(${QA_SEGMENT_IDS})${KEEP_ACTIVITIES}"
   fi
+  prune project_budgets "/rest/v1/project_budgets?project_id=in.(${QA_PROJECT_IDS})${KEEP_BUDGET_LINES}"
   prune projects "/rest/v1/projects?organization_id=eq.${QA_ORG}${KEEP_PROJECTS}"
 fi
+
+# Wave products hang off the organization, not off a project, so they are
+# pruned whether or not the QA project still exists — after the budget lines
+# that point at them.
+prune wave_products "/rest/v1/wave_products?organization_id=eq.${QA_ORG}${KEEP_WAVE_PRODUCTS}"
 
 QA_CREW_IDS="$(id_list "/rest/v1/crews?select=id&organization_id=eq.${QA_ORG}")"
 if [[ -n "$QA_CREW_IDS" ]]; then
   if [[ "$TEARDOWN" == 1 ]]; then
     prune crews "/rest/v1/crews?organization_id=eq.${QA_ORG}"
   else
-    prune crews "/rest/v1/crews?organization_id=eq.${QA_ORG}&id=not.in.(${QA_CREW})"
+    prune crews "/rest/v1/crews?organization_id=eq.${QA_ORG}&id=not.in.(${QA_CREW},${QA_CREW_OTHER})"
     prune crew_default_members "/rest/v1/crew_default_members?crew_id=eq.${QA_CREW}&user_id=not.in.(${QA_OPERATOR},${QA_TRINCHERO})"
   fi
 fi
@@ -291,10 +331,11 @@ fi
 if [[ "$TEARDOWN" == 1 ]]; then
   prune clients "/rest/v1/clients?organization_id=eq.${QA_ORG}"
   # user_profiles and user_roles cascade from auth.users.
-  for email in "$QA_OPERATOR_EMAIL" "$QA_TRINCHERO_EMAIL"; do
+  for email in "$QA_OPERATOR_EMAIL" "$QA_TRINCHERO_EMAIL" "$QA_SUPERVISOR_EMAIL"; do
     case "$email" in
-      "$QA_OPERATOR_EMAIL")  uid="$(find_user "$QA_OPERATOR" "$email")" ;;
-      *)                     uid="$(find_user "$QA_TRINCHERO" "$email")" ;;
+      "$QA_OPERATOR_EMAIL")   uid="$(find_user "$QA_OPERATOR" "$email")" ;;
+      "$QA_SUPERVISOR_EMAIL") uid="$(find_user "$QA_SUPERVISOR" "$email")" ;;
+      *)                      uid="$(find_user "$QA_TRINCHERO" "$email")" ;;
     esac
     if [[ -n "$uid" ]]; then
       auth_admin DELETE "/admin/users/${uid}" >/dev/null
@@ -361,26 +402,64 @@ QA_OPERATOR="$(seed_user "$QA_OPERATOR" "$QA_OPERATOR_EMAIL" "qa-Operador Movil"
 printf '  %-22s %s (operator)\n' "$QA_OPERATOR_EMAIL" "$QA_OPERATOR"
 QA_TRINCHERO="$(seed_user "$QA_TRINCHERO" "$QA_TRINCHERO_EMAIL" "qa-Trinchero Movil" trinchero)"
 printf '  %-22s %s (trinchero)\n' "$QA_TRINCHERO_EMAIL" "$QA_TRINCHERO"
+# The crew roles cannot assign a segment, plan an activity or approve a report,
+# so without this account half of what the mobile screens show cannot be set up
+# or signed off, and "a supervisor sees every segment" cannot be checked at all.
+QA_SUPERVISOR="$(seed_user "$QA_SUPERVISOR" "$QA_SUPERVISOR_EMAIL" "qa-Supervisor Movil" supervisor)"
+printf '  %-22s %s (supervisor)\n' "$QA_SUPERVISOR_EMAIL" "$QA_SUPERVISOR"
 
 # ── 3. Client and project ───────────────────────────────────────────────────
 echo "Client and project..."
 upsert clients "{\"id\":\"${QA_CLIENT}\",\"organization_id\":\"${QA_ORG}\",\"name\":\"qa-Cliente Movil\",\"short_name\":\"qa-CM\",\"status\":\"active\",\"created_by\":\"${QA_OPERATOR}\"}"
 upsert projects "{\"id\":\"${QA_PROJECT}\",\"organization_id\":\"${QA_ORG}\",\"client_id\":\"${QA_CLIENT}\",\"name\":\"qa-Proyecto Movil\",\"description\":\"Datos fijos para QA de la app de campo. Generado por scripts/seed-qa.sh.\",\"status\":\"active\",\"start_date\":\"2026-01-06\",\"target_end_date\":\"2026-12-31\",\"created_by\":\"${QA_OPERATOR}\"}"
 
-# ── 4. Line segments ────────────────────────────────────────────────────────
+# ── 4. Crews and the standing roster ────────────────────────────────────────
+# The production form pre-fills who worked from crew_default_members; without a
+# roster that screen cannot be exercised at all.
+#
+# Before the segments, not after: a segment now names the crew it is assigned
+# to, and the GRA-827 trigger refuses an assignment to a crew that is not in
+# the organization yet.
+echo "Crews..."
+# The second crew has no roster on purpose: it exists so that qa-Tramo 3 is
+# assigned to somebody other than the QA operator. A crew lead must not see it
+# in "mis tramos"; a supervisor must see it in the project.
+CREWS_JSON=$(cat <<JSON
+[
+  {"id":"${QA_CREW}","organization_id":"${QA_ORG}","name":"qa-Cuadrilla Movil","lead_user_id":"${QA_OPERATOR}","is_active":true,"created_by":"${QA_OPERATOR}"},
+  {"id":"${QA_CREW_OTHER}","organization_id":"${QA_ORG}","name":"qa-Cuadrilla Ajena","lead_user_id":null,"is_active":true,"created_by":"${QA_OPERATOR}"}
+]
+JSON
+)
+upsert crews "$CREWS_JSON"
+MEMBERS_JSON=$(cat <<JSON
+[
+  {"id":"97100000-0000-0000-0000-000000000001","crew_id":"${QA_CREW}","user_id":"${QA_OPERATOR}"},
+  {"id":"97100000-0000-0000-0000-000000000002","crew_id":"${QA_CREW}","user_id":"${QA_TRINCHERO}"}
+]
+JSON
+)
+upsert crew_default_members "$MEMBERS_JSON"
+
+
+# ── 5. Line segments ────────────────────────────────────────────────────────
 # Caracas, a few blocks east of the demo dataset, so the two never overlap on
 # the map while both stay inside the same city view.
+# `length_ft` and `length_m` are generated from the geometry (GRA-827) and
+# reject a write, so they are never sent; the planned quantity of a footage
+# activity comes off them server-side.
 echo "Line segments..."
 SEGMENTS_JSON=$(cat <<JSON
 [
-  {"id":"${QA_SEGMENT_1}","project_id":"${QA_PROJECT}","name":"qa-Tramo 1","description":"Tramo con servicios en los tres estados","geometry":"SRID=4326;LINESTRING(-66.88 10.5,-66.8785 10.5005,-66.877 10.501)","created_by":"${QA_OPERATOR}"},
-  {"id":"${QA_SEGMENT_2}","project_id":"${QA_PROJECT}","name":"qa-Tramo 2","description":"Tramo sin servicios abiertos","geometry":"SRID=4326;LINESTRING(-66.877 10.501,-66.8755 10.5015,-66.874 10.502)","created_by":"${QA_OPERATOR}"}
+  {"id":"${QA_SEGMENT_1}","project_id":"${QA_PROJECT}","name":"qa-Tramo 1","description":"Tramo con servicios en los tres estados y dos actividades planeadas","geometry":"SRID=4326;LINESTRING(-66.88 10.5,-66.8785 10.5005,-66.877 10.501)","assigned_crew_id":"${QA_CREW}","planned_date":"${QA_PLANNED_DATE}","created_by":"${QA_OPERATOR}"},
+  {"id":"${QA_SEGMENT_2}","project_id":"${QA_PROJECT}","name":"qa-Tramo 2","description":"Tramo asignado sin actividades planeadas","geometry":"SRID=4326;LINESTRING(-66.877 10.501,-66.8755 10.5015,-66.874 10.502)","assigned_crew_id":"${QA_CREW}","planned_date":"${QA_PLANNED_DATE}","created_by":"${QA_OPERATOR}"},
+  {"id":"${QA_SEGMENT_3}","project_id":"${QA_PROJECT}","name":"qa-Tramo 3","description":"Tramo de otra cuadrilla: no debe salir en mis tramos","geometry":"SRID=4326;LINESTRING(-66.874 10.502,-66.8725 10.5025,-66.871 10.503)","assigned_crew_id":"${QA_CREW_OTHER}","planned_date":"${QA_PLANNED_DATE}","created_by":"${QA_OPERATOR}"}
 ]
 JSON
 )
 upsert line_segments "$SEGMENTS_JSON"
 
-# ── 5. Services ─────────────────────────────────────────────────────────────
+# ── 6. Services ─────────────────────────────────────────────────────────────
 # One of every status the app can render, and four of the six service types,
 # so the map legend and the status filters all have something to show.
 echo "Services..."
@@ -400,7 +479,7 @@ JSON
 )
 upsert services "$SERVICES_JSON"
 
-# ── 6. Pre-existing damage ──────────────────────────────────────────────────
+# ── 7. Pre-existing damage ──────────────────────────────────────────────────
 echo "Pre-existing damages..."
 DAMAGES_JSON=$(cat <<JSON
 [
@@ -410,21 +489,55 @@ JSON
 )
 upsert pre_existing_damages "$DAMAGES_JSON"
 
-# ── 7. Crew and its standing roster ─────────────────────────────────────────
-# The production form pre-fills who worked from crew_default_members; without a
-# roster that screen cannot be exercised at all.
-echo "Crew..."
-upsert crews "{\"id\":\"${QA_CREW}\",\"organization_id\":\"${QA_ORG}\",\"name\":\"qa-Cuadrilla Movil\",\"lead_user_id\":\"${QA_OPERATOR}\",\"is_active\":true,\"created_by\":\"${QA_OPERATOR}\"}"
-MEMBERS_JSON=$(cat <<JSON
+# ── 8. The plan: Wave products, budget lines and segment activities ─────────
+# What the client is billed is a budget line, and a line is one Wave product
+# (GRA-825). A segment carries the lines planned on it as activities, with a
+# planned quantity each (GRA-831). Without these three tables the mobile
+# screens have a segment to show and nothing to report against: no activity
+# picker, no unit, no suggested quantity and no overproduction prompt.
+#
+# `wave_products` is written by wave-sync with the service role and is readable
+# but not writable by anyone else, which is exactly the key this script holds.
+# The ids here are QA ids, not real Wave ids.
+echo "Wave products..."
+WAVE_PRODUCTS_JSON=$(cat <<JSON
 [
-  {"id":"97100000-0000-0000-0000-000000000001","crew_id":"${QA_CREW}","user_id":"${QA_OPERATOR}"},
-  {"id":"97100000-0000-0000-0000-000000000002","crew_id":"${QA_CREW}","user_id":"${QA_TRINCHERO}"}
+  {"id":"${QA_WAVE_FT}","organization_id":"${QA_ORG}","wave_product_id":"qa-wave-3101","code":"3101","name":"qa-Directional Bore - Dirt","description":"Producto QA por pie","unit_price":5.25,"is_archived":false,"is_removed":false},
+  {"id":"${QA_WAVE_UNIT}","organization_id":"${QA_ORG}","wave_product_id":"qa-wave-3116","code":"3116","name":"qa-Handhold","description":"Producto QA por unidad","unit_price":180.00,"is_archived":false,"is_removed":false}
 ]
 JSON
 )
-upsert crew_default_members "$MEMBERS_JSON"
+upsert wave_products "$WAVE_PRODUCTS_JSON"
 
-# ── 8. Verify as the app does ───────────────────────────────────────────────
+# One line per unit kind: a footage line and a per-unit line. `client_rate_per_unit`
+# stays null because the price is the Wave product's.
+echo "Budget lines..."
+BUDGET_JSON=$(cat <<JSON
+[
+  {"id":"${QA_BUDGET_FT}","project_id":"${QA_PROJECT}","name":"qa-Bore direccional","unit_type":"drilling_ft","wave_product_id":"${QA_WAVE_FT}","client_rate_per_unit":null,"total_units":null,"is_active":true,"created_by":"${QA_SUPERVISOR}"},
+  {"id":"${QA_BUDGET_UNIT}","project_id":"${QA_PROJECT}","name":"qa-Handhold","unit_type":"unit","wave_product_id":"${QA_WAVE_UNIT}","client_rate_per_unit":null,"total_units":null,"is_active":true,"created_by":"${QA_SUPERVISOR}"}
+]
+JSON
+)
+upsert project_budgets "$BUDGET_JSON"
+
+# Only qa-Tramo 1 is planned. qa-Tramo 2 is left bare on purpose: a segment
+# nobody planned has to keep reporting the old way, by picking a unit.
+#
+# `planned_qty` is null for the footage activity: the GRA-831 trigger fills it
+# from the segment's generated `length_ft`, which is the behaviour the app's
+# "faltan N ft" depends on. The per-unit activity has to say its own number.
+echo "Segment activities..."
+ACTIVITIES_JSON=$(cat <<JSON
+[
+  {"id":"${QA_ACTIVITY_FT}","line_segment_id":"${QA_SEGMENT_1}","budget_line_id":"${QA_BUDGET_FT}","planned_qty":null,"created_by":"${QA_SUPERVISOR}"},
+  {"id":"${QA_ACTIVITY_UNIT}","line_segment_id":"${QA_SEGMENT_1}","budget_line_id":"${QA_BUDGET_UNIT}","planned_qty":2,"created_by":"${QA_SUPERVISOR}"}
+]
+JSON
+)
+upsert line_segment_activities "$ACTIVITIES_JSON"
+
+# ── 9. Verify as the app does ───────────────────────────────────────────────
 # Signing in with the anon key and counting through RLS is what makes this a
 # seed and not just a set of inserts: it proves the field user can actually
 # reach the rows, and it is the check that catches a duplicate. The counts are
@@ -442,6 +555,16 @@ as_user() {  # path → row count
     | jget "print(len(d) if isinstance(d, list) else 'not-a-list: '+json.dumps(d))"
 }
 
+# The screens read the plan through functions, not through tables, and both are
+# SECURITY INVOKER or DEFINER in ways a plain table count would not catch. A
+# count here is the closest thing to what the app actually sees.
+rpc_user() {  # function body → row count
+  curl -sS -X POST "${API_URL}/rest/v1/rpc/$1" \
+    -H "apikey: ${ANON_KEY}" -H "Authorization: Bearer ${TOKEN}" \
+    -H "Content-Type: application/json" -d "$2" \
+    | jget "print(len(d) if isinstance(d, list) else 'not-a-list: '+json.dumps(d))"
+}
+
 FAILED=0
 expect() {  # label expected actual
   if [[ "$2" == "$3" ]]; then
@@ -452,12 +575,36 @@ expect() {  # label expected actual
   fi
 }
 expect "projects"             1 "$(as_user "/projects?select=id")"
-expect "line_segments"        2 "$(as_user "/line_segments?select=id&project_id=eq.${QA_PROJECT}")"
+expect "line_segments"        3 "$(as_user "/line_segments?select=id&project_id=eq.${QA_PROJECT}")"
+expect "segments asignados"   3 "$(as_user "/line_segments?select=id&project_id=eq.${QA_PROJECT}&assigned_crew_id=not.is.null")"
 expect "services"             6 "$(as_user "/services?select=id&project_id=eq.${QA_PROJECT}")"
 expect "services to_open"     3 "$(as_user "/services?select=id&project_id=eq.${QA_PROJECT}&status=eq.to_open")"
 expect "pre_existing_damages" 1 "$(as_user "/pre_existing_damages?select=id&project_id=eq.${QA_PROJECT}")"
-expect "crews (active)"       1 "$(as_user "/crews?select=id&is_active=eq.true")"
+expect "crews (active)"       2 "$(as_user "/crews?select=id&is_active=eq.true")"
+# The app narrows the crew picker to the ones the user leads or is on, which is
+# the difference between one tap and twelve RLS denials.
+expect "crews del operador"   1 "$(as_user "/crews?select=id&is_active=eq.true&or=(lead_user_id.eq.${QA_OPERATOR},id.in.(${QA_CREW}))")"
 expect "crew_default_members" 2 "$(as_user "/crew_default_members?select=user_id&crew_id=eq.${QA_CREW}")"
+# Zero on purpose, and it has to stay zero: project_budgets is finance-tier
+# (GRA-799) and a crew holds no financial:read. If this ever reads 2, the rates
+# leaked to the field and the labels function below stopped being necessary.
+expect "budget lines (cerrado)" 0 "$(as_user "/project_budgets?select=id&project_id=eq.${QA_PROJECT}")"
+expect "segment activities"   2 "$(as_user "/line_segment_activities?select=id&line_segment_id=eq.${QA_SEGMENT_1}")"
+# Labels come from a SECURITY DEFINER function because project_budgets is
+# finance-tier: a crew holds no financial:read and still has to read "3101".
+# A `{...,...}` literal written inline inside a command substitution is a brace
+# expansion, not a JSON object: bash tears it into two words and PostgREST gets
+# half of it. Every body is built in a variable first, where braces are literal.
+RPC_PROJECT_BODY="{\"p_project_id\":\"${QA_PROJECT}\"}"
+RPC_CREW_BODY="{\"p_project_id\":\"${QA_PROJECT}\",\"p_crew_id\":\"${QA_CREW}\"}"
+expect "budget line labels"   2 "$(rpc_user project_budget_line_labels "$RPC_PROJECT_BODY")"
+# The one that matters for GRA-829: "mis tramos" for this crew is Tramo 1 with
+# its two activities plus Tramo 2 with none — three rows, and Tramo 3 absent
+# because it belongs to the other crew.
+expect "mis tramos (3 filas)" 3 "$(rpc_user get_segment_progress "$RPC_CREW_BODY")"
+# Without a crew the same function answers for the whole project: the two
+# activities of Tramo 1, plus one bare row each for Tramo 2 and Tramo 3.
+expect "todo el proyecto"     4 "$(rpc_user get_segment_progress "$RPC_PROJECT_BODY")"
 
 if [[ "$FAILED" != "0" ]]; then
   echo "FAILED: the QA dataset is not what it should be. Do not test against it." >&2
@@ -469,8 +616,13 @@ cat <<EOF
 QA dataset ready on ${API_URL}
 
   Project       qa-Proyecto Movil (${QA_PROJECT})
-  Sign in       ${QA_OPERATOR_EMAIL} / ${QA_PASSWORD}   (operator)
+  Sign in       ${QA_OPERATOR_EMAIL} / ${QA_PASSWORD}   (operator, jefe de qa-Cuadrilla Movil)
                 ${QA_TRINCHERO_EMAIL} / ${QA_PASSWORD}  (trinchero)
+                ${QA_SUPERVISOR_EMAIL} / ${QA_PASSWORD} (supervisor: asigna, planea y aprueba)
+
+  Mis tramos    qa-Tramo 1  qa-Cuadrilla Movil · 3101 por pie + 3116 por unidad
+                qa-Tramo 2  qa-Cuadrilla Movil · sin actividades planeadas
+                qa-Tramo 3  qa-Cuadrilla Ajena · no debe salir para el operador
 
 Point the app at this stack — a device or emulator needs the host's LAN
 address here, not 127.0.0.1:
