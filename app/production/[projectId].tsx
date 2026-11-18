@@ -640,7 +640,10 @@ export default function ProductionEntryScreen() {
                         hitSlop={12}
                         accessibilityRole="button"
                         accessibilityLabel={`Quitar ${photo.filename}`}
-                        className="absolute -right-2 -top-2 h-6 w-6 items-center justify-center rounded-full bg-red-500"
+                        // Inside the tile for the same reason as the grid's:
+                        // a badge hanging off the corner lands on the next
+                        // thumbnail, hit area included.
+                        className="absolute right-1 top-1 h-6 w-6 items-center justify-center rounded-full bg-red-500"
                       >
                         <Ionicons name="close" size={14} color="white" />
                       </Pressable>

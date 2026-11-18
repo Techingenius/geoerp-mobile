@@ -69,7 +69,11 @@ export function ProductionPhotoGrid({
                 hitSlop={12}
                 accessibilityRole="button"
                 accessibilityLabel={`Eliminar ${photo.filename}`}
-                className="absolute -top-2 -right-2 h-6 w-6 items-center justify-center rounded-full bg-red-500"
+                // Inside the tile, not hanging off it: at `-top-2 -right-2` the
+                // badge reached 16px past the corner and the grid's gap is 8,
+                // so in a 2-up row it sat on top of the next photo — and its
+                // hit area sat there too.
+                className="absolute right-1 top-1 h-6 w-6 items-center justify-center rounded-full bg-red-500"
               >
                 <Ionicons name="close" size={14} color="white" />
               </Pressable>
