@@ -1,0 +1,89 @@
+name: Mobile Delivery Contract
+
+# One half of docs/mobile-delivery-contract.md — the half a machine can hold:
+# a PR that changes what the app renders, or what the installed binary is, must
+# carry an installable build of its own head, and the only way to get one in
+# this repo is the `preview-build` label. The rest of the contract (screenshots,
+# the surfaces this run had, which backend the build talks to) is evidence that
+# lives in Multica, where no workflow can see it.
+#
+# This exists because PR #12 sat open for seven days with `QA Status = Pendiente`
+# touching four screens, with no label, no APK, and therefore nothing for the
+# visual gate to look at. Nobody was at fault: the label is opt-in, forgetting it
+# is free, and the cost only shows up when a reviewer opens the PR and leaves.
+on:
+  pull_request:
+    branches: [main]
+    # `labeled` / `unlabeled` so adding the label turns this check green with no
+    # push, and removing it turns it red again.
+    types: [opened, reopened, synchronize, labeled, unlabeled]
+
+concurrency:
+  group: delivery-contract-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  preview-build-label:
+    name: Preview build label
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Require preview-build when the PR changes the app
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const { filesRequiringBuild } = require(
+              `${process.env.GITHUB_WORKSPACE}/.github/scripts/needs-preview-build.js`,
+            );
+            const LABEL = 'preview-build';
+
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              pull_number: context.payload.pull_request.number,
+              per_page: 100,
+            });
+
+            // A deleted file cannot be rendered, so it cannot need a build.
+            const touched = filesRequiringBuild(
+              files.filter((f) => f.status !== 'removed').map((f) => f.filename),
+            );
+
+            if (touched.length === 0) {
+              core.info(
+                'Nothing in this PR changes what the app renders or what the binary is. ' +
+                  'No build of the head is required.',
+              );
+              return;
+            }
+
+            const shown = touched.slice(0, 10);
+            const list = shown.map((f) => `  - ${f}`).join('\n');
+            const more =
+              touched.length > shown.length
+                ? `\n  …and ${touched.length - shown.length} more`
+                : '';
+
+            const labels = context.payload.pull_request.labels.map((l) => l.name);
+            if (labels.includes(LABEL)) {
+              core.info(`Labelled \`${LABEL}\`, so this head gets an APK. Files requiring it:\n${list}${more}`);
+              return;
+            }
+
+            core.setFailed(
+              'This PR changes what the field app renders or what its binary is, so the ' +
+                'mobile delivery contract requires an installable build of THIS head:\n' +
+                `${list}${more}\n\n` +
+                `Fix: gh pr edit ${context.payload.pull_request.number} --add-label ${LABEL}\n` +
+                'That starts the Android Preview Build workflow, which comments the download ' +
+                'link. Then attach the screenshots to the Multica delivery comment — ' +
+                'docs/mobile-delivery-contract.md has the block to fill in.\n\n' +
+                'If the change truly cannot alter anything a person sees, say so in the PR ' +
+                'body and add the label anyway: a 15 min build costs less than a visual gate ' +
+                'approved on nothing.',
+            );

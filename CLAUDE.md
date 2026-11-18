@@ -51,6 +51,7 @@ types/            # TypeScript types (database models, navigation)
 └── database.ts            # Convenience aliases with typed geometry and enums
 
 scripts/
+├── seed-qa.sh     # Idempotent QA fixtures in the geoerp database
 └── sync-types.sh  # Sync database.generated.ts from geoerp repo
 ```
 
@@ -70,6 +71,29 @@ npx expo start --clear    # Always use --clear after config changes
 Required env vars:
 - `EXPO_PUBLIC_SUPABASE_URL` — same Supabase project as the web admin
 - `EXPO_PUBLIC_SUPABASE_ANON_KEY` — anon key from same project
+
+## QA Data
+
+Never build QA data by hand — `./scripts/seed-qa.sh` writes it. The app has no
+database of its own, so the fixtures (org, field users, project, segments,
+services in every status, a crew with a roster) live in the geoerp database.
+
+```bash
+./scripts/seed-qa.sh            # local geoerp stack; GEOERP_DIR=../geoerp by default
+./scripts/seed-qa.sh --help     # targets, env vars, the id scheme
+```
+
+- **Idempotent**: every row has a hard-coded id and every write is an upsert, so
+  two runs leave the same state. The script signs in as the QA user and asserts
+  the row counts through RLS, so a run that duplicated anything exits non-zero.
+- QA rows are named `qa-…` and their ids all start with `9`; geoerp's own demo
+  seed uses `a`–`f`. QA lives in its own organization, so RLS keeps the two
+  datasets apart.
+- It **refuses geoerp production**, and refuses any non-local target unless
+  `SEED_QA_ALLOW_REMOTE=1`. There is no geoerp staging project yet (GRA-973), so
+  a local stack is the only safe target today.
+- A device or emulator cannot reach `127.0.0.1` — put the host's LAN address in
+  `EXPO_PUBLIC_SUPABASE_URL` and restart with `--clear`.
 
 ## Critical Configuration Files
 
@@ -203,7 +227,13 @@ Before pushing any code:
 - **Never push directly to main** — always open a PR
 - Branch naming: `GRA-<number>/<short-description>`
 - PR title: include issue key — `feat: GRA-400 mobile UI overhaul`
-- Request review from **Ross** before merge
+- **Follow the delivery contract** — `docs/mobile-delivery-contract.md`. A PR
+  that changes what the app renders or what the binary is needs the
+  `preview-build` label (the `Preview build label` check fails without it), and
+  its delivery comment carries the surfaces this run had, the backend the build
+  talks to, and the screenshots **attached**, not linked.
+- To ask for review, leave the gates (`QA Status`, `Visual QA`) in `Pendiente`
+  with a gatekeeper watching that value — not an @mention
 - After merge: verify on device that the changes work as expected
 
 ## Common Gotchas

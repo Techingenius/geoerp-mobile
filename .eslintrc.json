@@ -8,7 +8,11 @@
       "jsx": true
     }
   },
-  "plugins": ["@typescript-eslint", "react", "react-hooks"],
+  "plugins": [
+    "@typescript-eslint",
+    "react",
+    "react-hooks"
+  ],
   "extends": [
     "eslint:recommended",
     "plugin:@typescript-eslint/recommended",
@@ -22,7 +26,12 @@
     }
   },
   "rules": {
-    "@typescript-eslint/no-unused-vars": ["warn", { "argsIgnorePattern": "^_" }],
+    "@typescript-eslint/no-unused-vars": [
+      "warn",
+      {
+        "argsIgnorePattern": "^_"
+      }
+    ],
     "@typescript-eslint/no-require-imports": "off",
     "react/prop-types": "off"
   },
@@ -33,5 +42,17 @@
     "babel.config.js",
     "metro.config.js",
     "tailwind.config.js"
+  ],
+  "overrides": [
+    {
+      "files": [
+        "__tests__/**/*.ts",
+        "__tests__/**/*.tsx",
+        "jest.setup.ts"
+      ],
+      "env": {
+        "jest": true
+      }
+    }
   ]
 }
