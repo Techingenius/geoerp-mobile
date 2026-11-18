@@ -27,6 +27,15 @@ import {
 } from "../../lib/api/production";
 import { segmentKeys } from "../../lib/api/segments";
 
+/**
+ * The single database function the create hook writes through (GRA-832). The
+ * entry and its `crew_members` land in one transaction, so there is no second
+ * request to lose and no half-written entry to report on — which is why these
+ * tests assert on the function's arguments rather than on a sequence of
+ * inserts, and why no test here queues a `crew_members` table response.
+ */
+const CREATE_ENTRY = "create_production_entry";
+
 const entryInput: CreateProductionEntryInput = {
   project_id: "project-1",
   crew_id: "crew-1",
@@ -35,6 +44,16 @@ const entryInput: CreateProductionEntryInput = {
   work_date: "2026-10-31",
   crew_member_ids: [],
 };
+
+/** A mock whose `create_production_entry` answers with one committed row. */
+function mockReturning(entry: Record<string, unknown> = { id: "entry-1" }) {
+  return createSupabaseMock({ rpcs: { [CREATE_ENTRY]: { data: entry } } });
+}
+
+/** The arguments the hook sent to `create_production_entry`. */
+function rpcParams() {
+  return mock.onlyRpc(CREATE_ENTRY).params as Record<string, unknown>;
+}
 
 describe("useActiveCrews", () => {
   it("asks only for active crews, ordered by name", async () => {
@@ -201,93 +220,212 @@ describe("useCreateProductionEntry", () => {
       );
     });
 
+    // The local session read exists to keep this case in the app's language;
+    // without it the call would go out as anon and come back as a bare
+    // permission-denied, so nothing may reach the database first.
     expect(mock.supabase.rpc).not.toHaveBeenCalled();
+    expect(mock.supabase.from).not.toHaveBeenCalled();
   });
 
-  it("writes the entry and its roster through one RPC call", async () => {
-    mock = createSupabaseMock({
-      rpcs: { create_production_entry: { data: { id: "entry-1" } } },
-    });
+  it("writes the entry and its roster in a single call", async () => {
+    mock = mockReturning({ id: "entry-7" });
 
     const { result } = await renderQueryHook(() => useCreateProductionEntry());
     await act(async () => {
       await result.current.mutateAsync({
         ...entryInput,
-        crew_member_ids: ["worker-1", "worker-2"],
+        crew_member_ids: ["u-1", "u-2"],
       });
     });
 
-    // One call, not an insert followed by a second one: the entry and the
-    // crew_members rows commit together (GRA-766, GRA-832).
-    expect(mock.supabase.from).not.toHaveBeenCalled();
-    expect(mock.onlyRpc("create_production_entry").args).toEqual({
+    expect(rpcParams()).toEqual({
       p_project_id: "project-1",
       p_crew_id: "crew-1",
       p_units_completed: 12,
       p_unit_type: "drilling_ft",
       p_work_date: "2026-10-31",
-      p_crew_member_ids: ["worker-1", "worker-2"],
-      // The function fills reported_by / created_by from auth.uid() and sets
-      // internal_status / billing_status, so the client sends neither.
+      p_crew_member_ids: ["u-1", "u-2"],
       p_line_segment_id: undefined,
       p_notes: undefined,
-      p_budget_line_id: undefined,
-      p_overproduction_reason: undefined,
     });
+    // One request, and no table write beside it: a crew reporting on
+    // intermittent signal can no longer land an entry whose roster was lost.
+    expect(mock.rpcs).toHaveLength(1);
+    expect(mock.supabase.from).not.toHaveBeenCalled();
   });
 
-  it("names the segment activity and carries the overproduction reason", async () => {
-    mock = createSupabaseMock({
-      rpcs: { create_production_entry: { data: { id: "entry-2" } } },
+  it("leaves the author and the approval tier to the function", async () => {
+    mock = mockReturning();
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync(entryInput);
     });
+
+    // `reported_by` / `created_by` come from `auth.uid()` and the
+    // `internal_status: 'reported'` / `billing_status: 'pending'` pair the web
+    // approval queue reads is set server-side. A client that sent them back
+    // would be claiming an authorship the database does not have to believe,
+    // and would need a round trip to read the current user first.
+    // The two GRA-831 arguments are part of the set the client is allowed to
+    // send: they say which activity is billed and why the entry goes past the
+    // plan, both of which only the reporter knows. Everything the database can
+    // decide for itself stays off this list.
+    expect(Object.keys(rpcParams()).sort()).toEqual([
+      "p_budget_line_id",
+      "p_crew_id",
+      "p_crew_member_ids",
+      "p_line_segment_id",
+      "p_notes",
+      "p_overproduction_reason",
+      "p_project_id",
+      "p_unit_type",
+      "p_units_completed",
+      "p_work_date",
+    ]);
+  });
+
+  it("sends project_id, since every RLS policy resolves org through it", async () => {
+    mock = mockReturning();
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync(entryInput);
+    });
+
+    expect(rpcParams().p_project_id).toBe("project-1");
+  });
+
+  it("sends an empty roster as an empty array, not as a skipped write", async () => {
+    mock = mockReturning();
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync({ ...entryInput, crew_member_ids: [] });
+    });
+
+    // `p_crew_member_ids` is a required argument, so an empty shift still has
+    // to carry it; there is no second request left to skip.
+    expect(rpcParams().p_crew_member_ids).toEqual([]);
+    expect(mock.on("crew_members")).toHaveLength(0);
+  });
+
+  it.each([
+    ["passes a segment id through", "segment-3", "segment-3"],
+    ["omits a null segment", null, undefined],
+    ["omits an absent segment", undefined, undefined],
+  ])("%s", async (_label, line_segment_id, expected) => {
+    mock = mockReturning();
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync({ ...entryInput, line_segment_id });
+    });
+
+    // Omitted rather than sent as null: the argument is optional in the
+    // function's signature, and PostgREST drops undefined so the default
+    // applies. An explicit null would be a value the function has to handle.
+    expect(rpcParams().p_line_segment_id).toBe(expected);
+  });
+
+  it.each([
+    ["trims surrounding whitespace", "  pozo tapado  ", "pozo tapado"],
+    ["omits whitespace-only notes", "   ", undefined],
+    ["omits an empty note", "", undefined],
+    ["omits an absent note", undefined, undefined],
+  ])("%s", async (_label, notes, expected) => {
+    mock = mockReturning();
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync({ ...entryInput, notes });
+    });
+
+    expect(rpcParams().p_notes).toBe(expected);
+  });
+
+  it.each([
+    ["passes the activity through", "line-3101", "line-3101"],
+    ["omits a null activity", null, undefined],
+    ["omits an absent activity", undefined, undefined],
+  ])("%s", async (_label, budget_line_id, expected) => {
+    mock = mockReturning();
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync({ ...entryInput, budget_line_id });
+    });
+
+    // Which of the segment's activities is billed (GRA-831). Omitted rather
+    // than null for the same reason as the segment: on a segment with no plan
+    // the function's default is what keeps the old way of reporting working.
+    expect(rpcParams().p_budget_line_id).toBe(expected);
+  });
+
+  it.each([
+    ["trims the reason", "  se extendió el bore  ", "se extendió el bore"],
+    ["omits a whitespace-only reason", "   ", undefined],
+    ["omits an absent reason", undefined, undefined],
+  ])("%s", async (_label, overproduction_reason, expected) => {
+    mock = mockReturning();
 
     const { result } = await renderQueryHook(() => useCreateProductionEntry());
     await act(async () => {
       await result.current.mutateAsync({
         ...entryInput,
-        line_segment_id: "segment-1",
-        budget_line_id: "line-3101",
-        overproduction_reason: "  se extendió el bore  ",
-        notes: "  turno corto  ",
+        overproduction_reason,
       });
     });
 
-    const args = mock.onlyRpc("create_production_entry").args!;
-    expect(args.p_line_segment_id).toBe("segment-1");
-    // Which activity is billed, and why it goes past the plan (GRA-831).
-    expect(args.p_budget_line_id).toBe("line-3101");
-    expect(args.p_overproduction_reason).toBe("se extendió el bore");
-    expect(args.p_notes).toBe("turno corto");
+    // A reason of spaces is no reason: the trigger reads it with btrim and
+    // would reject the entry anyway, so sending it would only turn a form
+    // error into a 400.
+    expect(rpcParams().p_overproduction_reason).toBe(expected);
   });
 
-  it("omits the optional arguments instead of sending null", async () => {
-    mock = createSupabaseMock({
-      rpcs: { create_production_entry: { data: { id: "entry-3" } } },
+  it("refreshes the segment progress too, not only the entry list", async () => {
+    mock = mockReturning();
+
+    const { result, queryClient } = await renderQueryHook(() =>
+      useCreateProductionEntry(),
+    );
+    const invalidate = jest.spyOn(queryClient, "invalidateQueries");
+
+    await act(async () => {
+      await result.current.mutateAsync(entryInput);
     });
+
+    // What the activity has left is the next report's suggested quantity, so a
+    // stale progress cache offers the field a number that was already used.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: segmentKeys.all });
+  });
+
+  it("returns the committed row the function answered with", async () => {
+    mock = mockReturning({ id: "entry-7", internal_status: "reported" });
 
     const { result } = await renderQueryHook(() => useCreateProductionEntry());
     await act(async () => {
-      await result.current.mutateAsync({
-        ...entryInput,
-        line_segment_id: null,
-        budget_line_id: null,
-        overproduction_reason: "   ",
-        notes: "   ",
-      });
+      await result.current.mutateAsync(entryInput);
     });
 
-    // An explicit null is not the same as letting the parameter default: the
-    // defaults are what make a report with no segment or no activity legal.
-    const args = mock.onlyRpc("create_production_entry").args!;
-    expect(args.p_line_segment_id).toBeUndefined();
-    expect(args.p_budget_line_id).toBeUndefined();
-    expect(args.p_overproduction_reason).toBeUndefined();
-    expect(args.p_notes).toBeUndefined();
+    expect(result.current.data).toEqual({
+      id: "entry-7",
+      internal_status: "reported",
+    });
+    // No `.single()`: the function returns one row, so PostgREST answers with
+    // the object itself and asking for a single row would be a second shape.
+    expect(argsOf(mock.onlyRpc(CREATE_ENTRY), "single")).toBeUndefined();
   });
 
-  it("propagates the RPC error as-is", async () => {
-    const error = { code: "42501", message: "permission denied" };
-    mock = createSupabaseMock({ rpcs: { create_production_entry: { error } } });
+  it("propagates the function's error untouched", async () => {
+    // `42501` is both the function's own "Not authenticated" and any RLS
+    // denial, so the database's message is more honest than anything this
+    // layer could substitute for it.
+    const error = {
+      code: "42501",
+      message: "new row violates row-level security policy",
+    };
+    mock = createSupabaseMock({ rpcs: { [CREATE_ENTRY]: { error } } });
 
     const { result } = await renderQueryHook(() => useCreateProductionEntry());
 
@@ -298,20 +436,11 @@ describe("useCreateProductionEntry", () => {
         .catch((caught: unknown) => caught);
     });
 
-    // 42501 is both the function's own "Not authenticated" and any RLS denial,
-    // so the database's own message survives to the screen.
     expect(thrown).toBe(error);
   });
 
-  it("refreshes the entry list and the segment progress on both paths", async () => {
-    mock = createSupabaseMock({
-      rpcs: {
-        create_production_entry: [
-          { data: { id: "entry-4" } },
-          { error: { code: "40001", message: "serialization failure" } },
-        ],
-      },
-    });
+  it("invalidates the project's entry list on success", async () => {
+    mock = mockReturning();
 
     const { result, queryClient } = await renderQueryHook(() =>
       useCreateProductionEntry(),
@@ -321,21 +450,35 @@ describe("useCreateProductionEntry", () => {
     await act(async () => {
       await result.current.mutateAsync(entryInput);
     });
+
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: productionKeys.byProject("project-1"),
+    });
+  });
+
+  it("invalidates the list on the failure path too", async () => {
+    mock = createSupabaseMock({
+      rpcs: { [CREATE_ENTRY]: { error: new Error("network request failed") } },
+    });
+
+    const { result, queryClient } = await renderQueryHook(() =>
+      useCreateProductionEntry(),
+    );
+    const invalidate = jest.spyOn(queryClient, "invalidateQueries");
+
     await act(async () => {
       await result.current.mutateAsync(entryInput).catch(() => undefined);
     });
 
-    const keys = invalidate.mock.calls.map(
-      (call) => (call[0] as { queryKey: unknown }).queryKey,
-    );
-    // Twice each: a response lost on the way back still leaves a committed
-    // entry, and what the next report suggests comes off the activity total.
-    expect(keys).toEqual([
-      productionKeys.byProject("project-1"),
-      segmentKeys.all,
-      productionKeys.byProject("project-1"),
-      segmentKeys.all,
-    ]);
+    // onSettled, not onSuccess. The write is atomic, so a failure never leaves
+    // a half-written entry — but a response lost on the way back still leaves a
+    // COMMITTED entry the app believes failed. The recent-entries list is what
+    // the duplicate-entry banner reads, so the one case that most needs the
+    // warning is the one that must refresh. Keyed off `variables`, since `data`
+    // is undefined here.
+    expect(invalidate).toHaveBeenCalledWith({
+      queryKey: productionKeys.byProject("project-1"),
+    });
   });
 });
 
@@ -346,31 +489,22 @@ describe("classifyPlanRejection", () => {
     message: "check constraint",
   });
 
-  it("reads the overproduction rule off the hint", () => {
-    expect(
-      classifyPlanRejection(violation("Set overproduction_reason.")),
-    ).toBe("overproduction_reason_required");
+  it.each([
+    ["Set overproduction_reason.", "overproduction_reason_required"],
+    ["Pass the budget line of the activity being reported.", "activity_required"],
+    [
+      "Add the activity to the segment, or report against one it has.",
+      "activity_not_on_segment",
+    ],
+  ])("reads %s off the hint", (hint, expected) => {
+    expect(classifyPlanRejection(violation(hint))).toBe(expected);
   });
 
-  it("reads the ambiguous-activity rule off the hint", () => {
-    expect(
-      classifyPlanRejection(
-        violation("Pass the budget line of the activity being reported."),
-      ),
-    ).toBe("activity_required");
-  });
-
-  it("reads the wrong-activity rule off the hint", () => {
-    expect(
-      classifyPlanRejection(
-        violation("Add the activity to the segment, or report against one it has."),
-      ),
-    ).toBe("activity_not_on_segment");
-  });
-
-  it("claims nothing for another check violation or another code", () => {
-    // Branching on `hint` and not on the message text: an unrecognised
-    // violation has to fall through to the generic error path, not be guessed.
+  it("claims nothing for another violation, another code or a plain error", () => {
+    // Branching on `hint` and not on the message: an unrecognised violation has
+    // to fall through to the generic error path, not be guessed at. The screen
+    // turns each of these into a different instruction, and the wrong one sends
+    // a crew lead looking for a field that is already filled in.
     expect(classifyPlanRejection(violation("something else"))).toBeNull();
     expect(
       classifyPlanRejection({ code: "42501", hint: null, message: "denied" }),

@@ -82,7 +82,7 @@ describe("useSegmentProgress", () => {
     );
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(mock.onlyRpc("get_segment_progress").args).toEqual({
+    expect(mock.onlyRpc("get_segment_progress").params).toEqual({
       p_project_id: "project-1",
       p_crew_id: "crew-1",
     });
@@ -114,7 +114,7 @@ describe("useSegmentProgress", () => {
 
     // Missing, not null: the argument defaults to NULL server-side, and an
     // admin or supervisor is meant to see every segment of the project.
-    expect(mock.onlyRpc("get_segment_progress").args).toEqual({
+    expect(mock.onlyRpc("get_segment_progress").params).toEqual({
       p_project_id: "project-1",
     });
     expect(
@@ -290,7 +290,7 @@ describe("useBudgetLineLabels", () => {
     );
     await waitFor(() => expect(result.current.isSuccess).toBe(true));
 
-    expect(mock.onlyRpc("project_budget_line_labels").args).toEqual({
+    expect(mock.onlyRpc("project_budget_line_labels").params).toEqual({
       p_project_id: "project-1",
     });
     expect(result.current.data!["line-3101"].wave_product_code).toBe("3101");
