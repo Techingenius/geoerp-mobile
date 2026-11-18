@@ -36,6 +36,7 @@ import {
   buildProductionPhotoPath,
   canAttachProductionPhoto,
   canRemoveProductionPhoto,
+  classifyUploadFailure,
   ProductionPhotoUploadError,
   useDeleteProductionEntryPhoto,
   useProductionEntryPhotos,
@@ -714,12 +715,33 @@ describe("canRemoveProductionPhoto", () => {
     ).toBe(true);
   });
 
-  it("does not let a supervisor delete, though it may attach", () => {
-    // The two policies differ on purpose: can_remove names admin only.
-    // Offering a delete here would be a button that always 42501s.
+  it("does not let a supervisor delete somebody else's photo", () => {
+    // The two policies differ on purpose: can_remove names admin and the
+    // reporter, not supervisor. Offering a delete here would always 42501.
     expect(
       canRemoveProductionPhoto(
         { reported_by: "user-2", internal_status: "reported" },
+        { role: "supervisor", userId: "user-1" },
+      ),
+    ).toBe(false);
+  });
+
+  it("lets a supervisor delete a photo on an entry THEY reported", () => {
+    // can_remove's reporter branch carries no role test — it is
+    // `reported_by = auth.uid() AND internal_status = 'reported'`. A
+    // supervisor who filed their own production is a reporter like any other,
+    // and a blanket `supervisor → false` hid the button on an entry the
+    // database would have let them clear (Ross, S2).
+    expect(
+      canRemoveProductionPhoto(
+        { reported_by: "user-1", internal_status: "reported" },
+        { role: "supervisor", userId: "user-1" },
+      ),
+    ).toBe(true);
+    // Still only while it is `reported`, same as any other reporter.
+    expect(
+      canRemoveProductionPhoto(
+        { reported_by: "user-1", internal_status: "supervisor_approved" },
         { role: "supervisor", userId: "user-1" },
       ),
     ).toBe(false);
@@ -753,5 +775,63 @@ describe("attachBlockedReason", () => {
     );
 
     expect(reason).toContain("Solo quien reportó");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Classifying the failure — the wrapper hides the cause unless you unwrap it
+// ---------------------------------------------------------------------------
+
+describe("classifyUploadFailure", () => {
+  it("reads the cause through the wrapper, not its photo count", () => {
+    // The wrapper's own message is "No se pudo subir 1 foto". Matching
+    // keywords on that can only ever answer "unknown", which is how every
+    // upload failure used to reach the reporter as "falló la subida".
+    const wrapped = new ProductionPhotoUploadError(0, [photo], {
+      message: "new row violates row-level security policy",
+      code: "42501",
+    });
+
+    expect(wrapped.message).not.toContain("row-level");
+    expect(classifyUploadFailure(wrapped)).toBe("denied");
+  });
+
+  it("classifies a PostgREST object that is not an Error", () => {
+    // PostgREST answers with a bare object; an `instanceof Error` check
+    // misses it, and that is the case worth telling apart.
+    expect(classifyUploadFailure({ message: "permission denied", code: "42501" })).toBe(
+      "denied",
+    );
+  });
+
+  it("tells offline apart from denied", () => {
+    expect(
+      classifyUploadFailure(
+        new ProductionPhotoUploadError(0, [photo], new TypeError("Network request failed")),
+      ),
+    ).toBe("offline");
+  });
+
+  it("recognises a file the bucket refuses as too large", () => {
+    expect(
+      classifyUploadFailure(
+        new ProductionPhotoUploadError(0, [photo], {
+          message: "The object exceeded the maximum allowed size",
+          statusCode: "413",
+        }),
+      ),
+    ).toBe("too-large");
+  });
+
+  it("keeps the guards this module throws before any upload", () => {
+    expect(classifyUploadFailure(new Error("No hay sesión activa"))).toBe("no-session");
+    expect(
+      classifyUploadFailure(new Error("No se pudo obtener la organización del usuario")),
+    ).toBe("no-org");
+  });
+
+  it("answers unknown rather than guessing", () => {
+    expect(classifyUploadFailure(new Error("algo raro"))).toBe("unknown");
+    expect(classifyUploadFailure(undefined)).toBe("unknown");
   });
 });

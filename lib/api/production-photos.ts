@@ -145,23 +145,21 @@ export function canAttachProductionPhoto(
 
 /**
  * Mirror of `can_remove_production_entry_photo` (GRA-1134): admin anywhere, or
- * the reporter while the entry is still `reported`. Evidence a supervisor has
- * already looked at is not withdrawn by the crew — which is why `supervisor`
- * is absent here while it can attach.
+ * whoever reported the entry, while it is still `reported`. Evidence a
+ * supervisor has already looked at is not withdrawn by the crew.
+ *
+ * The reporter branch carries no role test, because the policy's does not: it
+ * is `reported_by = auth.uid() AND internal_status = 'reported'` and nothing
+ * else. A supervisor who filed their own production is a reporter like any
+ * other and may remove their own photo while it is still `reported` (Ross,
+ * S2 on GRA-1135) — an earlier `role === 'supervisor' → false` here hid the
+ * button on an entry the database would have let them clear.
  */
 export function canRemoveProductionPhoto(
   entry: PhotoPermissionEntry,
   viewer: PhotoPermissionViewer,
 ): boolean {
   if (viewer.role === "admin") return true;
-  if (viewer.role === null) {
-    return (
-      !!viewer.userId &&
-      entry.reported_by === viewer.userId &&
-      entry.internal_status === "reported"
-    );
-  }
-  if (viewer.role === "supervisor") return false;
   return (
     !!viewer.userId &&
     entry.reported_by === viewer.userId &&
@@ -304,6 +302,85 @@ export class ProductionPhotoUploadError extends Error {
   }
 }
 
+/**
+ * Why an upload failed, in the only terms a screen has to tell apart.
+ *
+ * `denied` is the one that changes what the screen DOES rather than what it
+ * says: a retry after `42501` fails every time, so the screen must stop
+ * offering one.
+ */
+export type UploadFailureKind =
+  | "no-session"
+  | "no-org"
+  | "offline"
+  | "denied"
+  | "too-large"
+  | "unknown";
+
+/**
+ * Everything the thrown value can say about itself, lowercased.
+ *
+ * Three shapes arrive here and only one of them is an `Error`: Storage answers
+ * with a `StorageApiError`, PostgREST with a bare object carrying `message`
+ * and `code` (`42501` for an RLS denial), and this module's own guards with a
+ * plain `Error`. Reading `.message` off an `instanceof Error` check alone
+ * misses the PostgREST case, which is exactly the one worth telling apart.
+ */
+function errorSignals(error: unknown): string {
+  if (typeof error === "string") return error.toLowerCase();
+  if (!error || typeof error !== "object") return "";
+
+  const e = error as Record<string, unknown>;
+  return [e.message, e.code, e.statusCode, e.status, e.error]
+    .filter((part) => typeof part === "string" || typeof part === "number")
+    .join(" ")
+    .toLowerCase();
+}
+
+/**
+ * Classify what actually went wrong, through the wrapper.
+ *
+ * `ProductionPhotoUploadError` exists to carry WHICH photos failed, so its own
+ * message is a count — "No se pudo subir 2 fotos" — and matching keywords
+ * against it can only ever say "unknown". The diagnosis lives in `cause`
+ * (Ross, S1 on GRA-1135); before this, every upload failure reached the
+ * reporter as "falló la subida", offline and permission-denied alike.
+ */
+export function classifyUploadFailure(error: unknown): UploadFailureKind {
+  const cause =
+    error instanceof ProductionPhotoUploadError ? (error.cause ?? error) : error;
+  const text = errorSignals(cause) || errorSignals(error);
+
+  if (text.includes("no hay sesión activa")) return "no-session";
+  if (text.includes("no se pudo obtener la organización")) return "no-org";
+  if (
+    text.includes("row-level security") ||
+    text.includes("permission denied") ||
+    text.includes("unauthorized") ||
+    text.includes("42501") ||
+    text.includes("403")
+  ) {
+    return "denied";
+  }
+  if (
+    text.includes("exceeded the maximum") ||
+    text.includes("too large") ||
+    text.includes("payload too large") ||
+    text.includes("413")
+  ) {
+    return "too-large";
+  }
+  if (
+    text.includes("network") ||
+    text.includes("fetch") ||
+    text.includes("timeout") ||
+    text.includes("timed out")
+  ) {
+    return "offline";
+  }
+  return "unknown";
+}
+
 export interface UploadProductionPhotosInput {
   entryId: string;
   projectId: string;
@@ -392,6 +469,14 @@ export function useUploadProductionEntryPhotos() {
           if (rowError) {
             // The file is up but nothing points at it. Take it back out so a
             // retry does not pile up objects no screen will ever show.
+            //
+            // Best effort on purpose: the DELETE policy is narrower than the
+            // INSERT one — `can_remove` wants `reported`, `can_attach` also
+            // allows `supervisor_approved` and `rejected` — so a reporter
+            // attaching to an already-approved entry cannot take back the
+            // object they just wrote, and it is orphaned until an admin
+            // clears it. Narrowing that gap is a backend change; noted on
+            // GRA-1137 (Ross, N2 on GRA-1135).
             await supabase.storage
               .from(BUCKET)
               .remove([storagePath])

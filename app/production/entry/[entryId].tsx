@@ -13,11 +13,13 @@ import { useProductionEntry } from "../../../lib/api/production";
 import {
   attachBlockedReason,
   canRemoveProductionPhoto,
+  classifyUploadFailure,
   useDeleteProductionEntryPhoto,
   useProductionEntryPhotos,
   useProductionPhotoUrls,
   useUploadProductionEntryPhotos,
   type ProductionPhotoInput,
+  type UploadFailureKind,
 } from "../../../lib/api/production-photos";
 import { useAuthStore } from "../../../lib/stores/auth-store";
 import { useLocation } from "../../../lib/hooks/use-location";
@@ -119,10 +121,22 @@ export default function ProductionEntryDetailScreen() {
         photos: [photo],
       });
     } catch (error) {
-      Alert.alert("No se pudo subir la foto", uploadErrorMessage(error), [
-        { text: "Cerrar", style: "cancel" },
-        { text: "Reintentar", onPress: onAddPhotoRetry(photo) },
-      ]);
+      // A denial is the one failure a retry cannot fix: the entry moved out
+      // of the reporter's window while this screen was open, so offering
+      // "Reintentar" would loop on 42501 forever (Ross, S1). Refresh instead
+      // — the header and the button come back correct for the new status.
+      const kind = classifyUploadFailure(error);
+
+      Alert.alert(
+        "No se pudo subir la foto",
+        uploadErrorMessage(kind),
+        kind === "denied"
+          ? [{ text: "Entendido", onPress: () => refetchEntry() }]
+          : [
+              { text: "Cerrar", style: "cancel" },
+              { text: "Reintentar", onPress: onAddPhotoRetry(photo) },
+            ],
+      );
     }
   };
 
@@ -137,7 +151,7 @@ export default function ProductionEntryDetailScreen() {
         photos: [photo],
       });
     } catch (error) {
-      Alert.alert("Sigue fallando", uploadErrorMessage(error));
+      Alert.alert("Sigue fallando", uploadErrorMessage(classifyUploadFailure(error)));
     }
   };
 
@@ -290,41 +304,32 @@ export default function ProductionEntryDetailScreen() {
   );
 }
 
-function uploadErrorMessage(error: unknown): string {
-  const msg = error instanceof Error ? error.message.toLowerCase() : "";
-
-  if (msg.includes("no hay sesión activa")) {
-    return "Tu sesión expiró. Vuelve a iniciar sesión y la subes de nuevo.";
+/** The cause, in the reporter's words. Classified in `lib/api` so the keyword
+ * list has one home and a test can reach it. */
+function uploadErrorMessage(kind: UploadFailureKind): string {
+  switch (kind) {
+    case "no-session":
+      return "Tu sesión expiró. Vuelve a iniciar sesión y la subes de nuevo.";
+    case "no-org":
+      return "No pudimos leer tu organización. Vuelve a iniciar sesión.";
+    case "denied":
+      return "Ya no puedes agregar fotos a este reporte: un admin lo aprobó. Pídele a tu supervisor que la agregue.";
+    case "offline":
+      return "Sin conexión. Reintenta la foto cuando tengas señal.";
+    case "too-large":
+      return "La foto pesa demasiado para subirla. Toma otra con menos detalle.";
+    default:
+      return "No se pudo subir la foto; puedes reintentarlo.";
   }
-  if (
-    msg.includes("row-level security") ||
-    msg.includes("violates row-level") ||
-    msg.includes("permission denied") ||
-    msg.includes("42501")
-  ) {
-    return "Ya no puedes agregar fotos a este reporte. Pídele a tu supervisor que la agregue.";
-  }
-  if (msg.includes("network") || msg.includes("fetch") || msg.includes("timeout")) {
-    return "Sin conexión. La producción ya está registrada: reintenta la foto cuando tengas señal.";
-  }
-  if (msg.includes("exceeded the maximum") || msg.includes("too large")) {
-    return "La foto pesa demasiado para subirla. Toma otra con menos detalle.";
-  }
-  return "La producción ya está registrada. No se pudo subir la foto; puedes reintentarlo.";
 }
 
 function deleteErrorMessage(error: unknown): string {
-  const msg = error instanceof Error ? error.message.toLowerCase() : "";
-
-  if (
-    msg.includes("row-level security") ||
-    msg.includes("permission denied") ||
-    msg.includes("42501")
-  ) {
-    return "Ya no puedes borrar fotos de este reporte: tu supervisor lo revisó.";
+  switch (classifyUploadFailure(error)) {
+    case "denied":
+      return "Ya no puedes borrar fotos de este reporte: tu supervisor ya lo revisó.";
+    case "offline":
+      return "Sin conexión. Intenta de nuevo cuando tengas señal.";
+    default:
+      return "No se pudo eliminar la foto. Intenta de nuevo.";
   }
-  if (msg.includes("network") || msg.includes("fetch")) {
-    return "Sin conexión. Intenta de nuevo cuando tengas señal.";
-  }
-  return "No se pudo eliminar la foto. Intenta de nuevo.";
 }

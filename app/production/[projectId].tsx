@@ -24,12 +24,16 @@ import {
   useProjectProductionEntries,
 } from "../../lib/api/production";
 import {
+  attachBlockedReason,
+  classifyUploadFailure,
   ProductionPhotoUploadError,
   useProductionPhotosByEntries,
   useProductionPhotoUrls,
   useUploadProductionEntryPhotos,
   type ProductionPhotoInput,
+  type UploadFailureKind,
 } from "../../lib/api/production-photos";
+import { useAuthStore } from "../../lib/stores/auth-store";
 import { useLocation } from "../../lib/hooks/use-location";
 import {
   captureProductionPhoto,
@@ -161,6 +165,12 @@ export default function ProductionEntryScreen() {
 
   const uploadPhotos = useUploadProductionEntryPhotos();
   const { location } = useLocation();
+
+  // Only to decide what a recent-entries card PROMISES. Reporting itself has
+  // no role gate here: crew membership is the real restriction and RLS owns it.
+  const role = useAuthStore((s) => s.role);
+  const userId = useAuthStore((s) => s.user?.id ?? null);
+  const viewer = useMemo(() => ({ role, userId }), [role, userId]);
   const [photos, setPhotos] = useState<CapturedPhoto[]>([]);
   const [pendingUpload, setPendingUpload] =
     useState<PendingPhotoUpload | null>(null);
@@ -314,7 +324,7 @@ export default function ProductionEntryScreen() {
           ? error.failed
           : pending.photos;
       setPendingUpload({ ...pending, photos: stillFailing });
-      Alert.alert("Sigue fallando", photoErrorMessage(error));
+      Alert.alert("Sigue fallando", photoErrorMessage(classifyUploadFailure(error)));
     }
   };
 
@@ -402,7 +412,7 @@ export default function ProductionEntryScreen() {
             uploaded > 0 ? `Subimos ${uploaded} de ${captured.length} fotos. ` : ""
           }No se pudo subir ${
             failed.length === 1 ? "1 foto" : `${failed.length} fotos`
-          }: ${photoErrorMessage(error)}\n\nNo vuelvas a registrar el reporte — solo falta la foto.`,
+          }: ${photoErrorMessage(classifyUploadFailure(error))}\n\nNo vuelvas a registrar el reporte — solo falta la foto.`,
           [
             { text: "Luego", style: "cancel" },
             {
@@ -824,7 +834,9 @@ export default function ProductionEntryScreen() {
                           color="#9CA3AF"
                         />
                         <Text className="text-xs text-gray-400">
-                          Sin fotos · toca para agregar
+                          {attachBlockedReason(entry, viewer)
+                            ? "Sin fotos"
+                            : "Sin fotos · toca para agregar"}
                         </Text>
                       </View>
                     )}
@@ -842,32 +854,27 @@ export default function ProductionEntryScreen() {
 /**
  * Why a photo did not go up, for a message that already says the production is
  * saved. So this returns only the cause — never "could not save".
+ *
+ * Takes a kind rather than the error: the thrown value is a
+ * `ProductionPhotoUploadError` whose own message is a count, so matching
+ * keywords on it only ever produced "falló la subida" (Ross, S1). The
+ * classification reads `cause`, and lives in `lib/api` where a test reaches it.
  */
-function photoErrorMessage(error: unknown): string {
-  const msg = error instanceof Error ? error.message.toLowerCase() : "";
-
-  if (msg.includes("no hay sesión activa")) {
-    return "tu sesión expiró";
+function photoErrorMessage(kind: UploadFailureKind): string {
+  switch (kind) {
+    case "no-session":
+      return "tu sesión expiró";
+    case "no-org":
+      return "no pudimos leer tu organización";
+    case "offline":
+      return "no hay conexión";
+    case "too-large":
+      return "la foto pesa demasiado";
+    case "denied":
+      return "tu usuario no tiene permiso para adjuntarla";
+    default:
+      return "falló la subida";
   }
-  if (msg.includes("no se pudo obtener la organización")) {
-    return "no pudimos leer tu organización";
-  }
-  if (msg.includes("network") || msg.includes("fetch") || msg.includes("timeout")) {
-    return "no hay conexión";
-  }
-  if (msg.includes("exceeded the maximum") || msg.includes("too large")) {
-    return "la foto pesa demasiado";
-  }
-  if (
-    msg.includes("row-level security") ||
-    msg.includes("permission denied") ||
-    msg.includes("42501")
-  ) {
-    return "tu usuario no tiene permiso para adjuntarla";
-  }
-
-  console.warn("[ProductionEntry] unhandled photo upload error:", error);
-  return "falló la subida";
 }
 
 function getErrorMessage(error: unknown): string {
