@@ -11,6 +11,7 @@ export const productionKeys = {
   all: ["production-entries"] as const,
   byProject: (projectId: string) =>
     ["production-entries", "project", projectId] as const,
+  byId: (entryId: string) => ["production-entries", "entry", entryId] as const,
   activeCrews: ["crews", "active"] as const,
   crewDefaultMembers: (crewId: string) =>
     ["crew-default-members", crewId] as const,
@@ -100,6 +101,33 @@ export function useProjectProductionEntries(projectId: string | undefined) {
       return (data as unknown as ProductionEntryWithNames[]) ?? [];
     },
     enabled: !!projectId,
+  });
+}
+
+/**
+ * One entry, for the detail screen a recent-entries card opens.
+ *
+ * Fetched rather than passed through navigation params: the screen is also
+ * reachable as a deep link, and `reported_by` plus `internal_status` are what
+ * decide whether the add-photo button is shown at all — stale copies of those
+ * two fields are exactly what produces a button that fails with 42501.
+ */
+export function useProductionEntry(entryId: string | undefined) {
+  return useQuery({
+    queryKey: productionKeys.byId(entryId ?? ""),
+    queryFn: async (): Promise<ProductionEntryWithNames | null> => {
+      const { data, error } = await supabase
+        .from("production_entries")
+        .select(
+          "*, crew:crews!production_entries_crew_id_fkey(name), reported_by_user:user_profiles!production_entries_reported_by_fkey(full_name)",
+        )
+        .eq("id", entryId!)
+        .maybeSingle();
+
+      if (error) throw error;
+      return (data as unknown as ProductionEntryWithNames) ?? null;
+    },
+    enabled: !!entryId,
   });
 }
 

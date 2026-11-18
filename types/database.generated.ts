@@ -2805,6 +2805,57 @@ export type Database = {
           },
         ]
       }
+      production_entry_photos: {
+        Row: {
+          caption: string | null
+          created_at: string | null
+          filename: string
+          id: string
+          location: unknown
+          production_entry_id: string
+          storage_path: string
+          taken_at: string | null
+          uploaded_by: string | null
+        }
+        Insert: {
+          caption?: string | null
+          created_at?: string | null
+          filename: string
+          id?: string
+          location?: unknown
+          production_entry_id: string
+          storage_path: string
+          taken_at?: string | null
+          uploaded_by?: string | null
+        }
+        Update: {
+          caption?: string | null
+          created_at?: string | null
+          filename?: string
+          id?: string
+          location?: unknown
+          production_entry_id?: string
+          storage_path?: string
+          taken_at?: string | null
+          uploaded_by?: string | null
+        }
+        Relationships: [
+          {
+            foreignKeyName: "production_entry_photos_production_entry_id_fkey"
+            columns: ["production_entry_id"]
+            isOneToOne: false
+            referencedRelation: "production_entries"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "production_entry_photos_uploaded_by_fkey"
+            columns: ["uploaded_by"]
+            isOneToOne: false
+            referencedRelation: "user_profiles"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       project_budgets: {
         Row: {
           budget_amount: number | null

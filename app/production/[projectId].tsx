@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
+  Image,
   ScrollView,
   ActivityIndicator,
   Alert,
@@ -33,12 +34,28 @@ import {
   useProjectProductionEntries,
   classifyPlanRejection,
 } from "../../lib/api/production";
+import {
+  attachBlockedReason,
+  classifyUploadFailure,
+  ProductionPhotoUploadError,
+  useProductionPhotosByEntries,
+  useProductionPhotoUrls,
+  useUploadProductionEntryPhotos,
+  type ProductionPhotoInput,
+  type UploadFailureKind,
+} from "../../lib/api/production-photos";
 import { useAuthStore } from "../../lib/stores/auth-store";
+import { useLocation } from "../../lib/hooks/use-location";
+import {
+  captureProductionPhoto,
+  type CapturedPhoto,
+} from "../../lib/utils/capture-photo";
 import { Input } from "../../components/ui/Input";
 import { Button } from "../../components/ui/Button";
 import { Badge } from "../../components/ui/Badge";
 import { Card, CardContent } from "../../components/ui/Card";
 import { ChipSelect, type ChipOption } from "../../components/ui/ChipSelect";
+import { ProductionPhotoGrid } from "../../components/features/ProductionPhotoGrid";
 import type {
   ProductionInternalStatus,
   UnitType,
@@ -133,6 +150,15 @@ const productionSchema = z.object({
 
 type ProductionFormValues = z.infer<typeof productionSchema>;
 
+/** What the pending retry banner needs to re-send only the photos. */
+interface PendingPhotoUpload {
+  entryId: string;
+  projectId: string;
+  photos: ProductionPhotoInput[];
+  /** Named in the banner so the reporter knows which report it belongs to. */
+  label: string;
+}
+
 export default function ProductionEntryScreen() {
   const { projectId, segmentId, budgetLineId } = useLocalSearchParams<{
     projectId: string;
@@ -149,6 +175,31 @@ export default function ProductionEntryScreen() {
     useProjectProductionEntries(projectId);
   const { data: lineLabels } = useBudgetLineLabels(projectId);
   const createEntry = useCreateProductionEntry();
+
+  // Photos of the entries on screen, in one query rather than one per card.
+  const entryIds = useMemo(
+    () => (entries ?? []).map((entry) => entry.id),
+    [entries],
+  );
+  const { data: photosByEntry } = useProductionPhotosByEntries(entryIds);
+  const listPhotoPaths = useMemo(
+    () =>
+      Object.values(photosByEntry ?? {}).flatMap((list) =>
+        list.map((photo) => photo.storage_path),
+      ),
+    [photosByEntry],
+  );
+  const { data: listPhotoUrls } = useProductionPhotoUrls(listPhotoPaths);
+
+  const uploadPhotos = useUploadProductionEntryPhotos();
+  const { location } = useLocation();
+  const [photos, setPhotos] = useState<CapturedPhoto[]>([]);
+  const [pendingUpload, setPendingUpload] =
+    useState<PendingPhotoUpload | null>(null);
+
+  // Only to decide what a recent-entries card PROMISES; the policy decides
+  // what it may actually do.
+  const viewer = useMemo(() => ({ role, userId: userId ?? null }), [role, userId]);
 
   const [memberIds, setMemberIds] = useState<string[]>([]);
   // Set when the database — not the form — asks for an overproduction reason,
@@ -364,6 +415,62 @@ export default function ProductionEntryScreen() {
     scrollRef.current?.scrollTo({ y: 0, animated: true });
   };
 
+  const onCapturePhoto = async () => {
+    const outcome = await captureProductionPhoto();
+
+    if (outcome.status === "denied") {
+      Alert.alert(
+        "Permiso de cámara",
+        "Habilita la cámara para esta app desde los ajustes del teléfono. También puedes registrar la producción sin foto y agregarla después.",
+      );
+      return;
+    }
+    if (outcome.status === "cancelled") return;
+
+    setPhotos((prev) => [...prev, outcome.photo]);
+  };
+
+  const removeCapturedPhoto = (uri: string) =>
+    setPhotos((prev) => prev.filter((photo) => photo.uri !== uri));
+
+  /**
+   * The GPS fix is stamped on the photo at submit time, not at capture time.
+   *
+   * Close enough: the crew is standing at the work when they report it. What
+   * matters more is the other half — no fix means `location` goes up NULL and
+   * the photo still uploads. A reporter in a trench or under canopy cannot be
+   * made to wait for satellites.
+   */
+  const withGps = (captured: CapturedPhoto[]): ProductionPhotoInput[] =>
+    captured.map((photo) => ({
+      ...photo,
+      latitude: location?.latitude ?? null,
+      longitude: location?.longitude ?? null,
+    }));
+
+  /** Re-send only the files that failed. Never the report — it is committed. */
+  const retryPendingUpload = async (pending: PendingPhotoUpload) => {
+    try {
+      await uploadPhotos.mutateAsync({
+        entryId: pending.entryId,
+        projectId: pending.projectId,
+        photos: pending.photos,
+      });
+      setPendingUpload(null);
+      Alert.alert(
+        pending.photos.length === 1 ? "Foto subida" : "Fotos subidas",
+        "Ya quedaron adjuntas al reporte.",
+      );
+    } catch (error) {
+      const stillFailing =
+        error instanceof ProductionPhotoUploadError
+          ? error.failed
+          : pending.photos;
+      setPendingUpload({ ...pending, photos: stillFailing });
+      Alert.alert("Sigue fallando", photoErrorMessage(classifyUploadFailure(error)));
+    }
+  };
+
   const onSubmit = async (values: ProductionFormValues) => {
     Keyboard.dismiss();
 
@@ -404,7 +511,7 @@ export default function ProductionEntryScreen() {
     };
 
     try {
-      await createEntry.mutateAsync({
+      const entry = await createEntry.mutateAsync({
         project_id: projectId,
         line_segment_id:
           values.line_segment_id === NO_SEGMENT ? null : values.line_segment_id,
@@ -420,12 +527,76 @@ export default function ProductionEntryScreen() {
         crew_member_ids: memberIds,
       });
 
+      // The entry is committed from here on. Everything below may fail
+      // without putting the report itself in doubt, and the reporter has to
+      // be told that in those words.
       clearForNextEntry();
 
-      Alert.alert(
-        "Producción registrada",
-        "El reporte quedó en estado Reportado, pendiente de aprobación del supervisor.",
-      );
+      const captured = photos;
+      setPhotos([]);
+
+      if (captured.length === 0) {
+        Alert.alert(
+          "Producción registrada",
+          "El reporte quedó en estado Reportado, pendiente de aprobación del supervisor. Puedes agregarle fotos después desde Reportes recientes.",
+        );
+        return;
+      }
+
+      // Photos can only go up now: `create_production_entry` is one
+      // transaction and the object path needs the entry id it just returned.
+      try {
+        await uploadPhotos.mutateAsync({
+          entryId: entry.id,
+          projectId,
+          photos: withGps(captured),
+        });
+
+        Alert.alert(
+          "Producción registrada",
+          captured.length === 1
+            ? "El reporte quedó en Reportado, con su foto adjunta."
+            : `El reporte quedó en Reportado, con sus ${captured.length} fotos adjuntas.`,
+        );
+      } catch (error) {
+        // GRA-766 all over again if this is phrased as a failure: the entry
+        // IS saved, so the one thing the message must never invite is
+        // re-sending the report. Retry means the file, and only the file.
+        const failed =
+          error instanceof ProductionPhotoUploadError
+            ? error.failed
+            : withGps(captured);
+        const uploaded =
+          error instanceof ProductionPhotoUploadError ? error.uploaded : 0;
+
+        const pending: PendingPhotoUpload = {
+          entryId: entry.id,
+          projectId,
+          photos: failed,
+          // The unit the entry was actually written with, not "ft":
+          // since GRA-831 an activity can be measured in `unit`, and a
+          // banner reading "12 ft" for 12 units names the wrong report
+          // back to the reporter (Ross, N4).
+          label: `${formatQty(Number(values.units_completed))} ${UNIT_SUFFIX[effectiveUnit]} · ${values.work_date}`,
+        };
+        setPendingUpload(pending);
+
+        Alert.alert(
+          "La producción SÍ quedó registrada",
+          `${
+            uploaded > 0 ? `Subimos ${uploaded} de ${captured.length} fotos. ` : ""
+          }No se pudo subir ${
+            failed.length === 1 ? "1 foto" : `${failed.length} fotos`
+          }: ${photoErrorMessage(classifyUploadFailure(error))}\n\nNo vuelvas a registrar el reporte — solo falta la foto.`,
+          [
+            { text: "Luego", style: "cancel" },
+            {
+              text: "Reintentar foto",
+              onPress: () => retryPendingUpload(pending),
+            },
+          ],
+        );
+      }
     } catch (error) {
       // The entry and its roster are one transaction (GRA-832), so a failure
       // here wrote nothing: every branch below can ask for a correction and
@@ -750,6 +921,57 @@ export default function ProductionEntryScreen() {
               )}
             />
 
+            {/*
+              Photos. After the quantity and before sending, because a photo is
+              evidence of the quantity — and optional, so the label says so
+              rather than making a crew with no camera free give up on the
+              report (Jonas, GRA-829).
+            */}
+            <View className="gap-2">
+              <Text className="text-sm font-medium text-gray-700">
+                Fotos (opcional) · {photos.length}
+              </Text>
+
+              {photos.length > 0 && (
+                <View className="flex-row flex-wrap gap-2">
+                  {photos.map((photo) => (
+                    <View key={photo.uri} className="relative">
+                      <Image
+                        source={{ uri: photo.uri }}
+                        className="h-20 w-20 rounded-lg bg-gray-100"
+                        resizeMode="cover"
+                        accessibilityLabel={photo.filename}
+                      />
+                      <Pressable
+                        onPress={() => removeCapturedPhoto(photo.uri)}
+                        hitSlop={12}
+                        accessibilityRole="button"
+                        accessibilityLabel={`Quitar ${photo.filename}`}
+                        // Inside the tile: a badge hanging off the corner lands
+                        // on the next thumbnail, hit area included.
+                        className="absolute right-1 top-1 h-6 w-6 items-center justify-center rounded-full bg-red-500"
+                      >
+                        <Ionicons name="close" size={14} color="white" />
+                      </Pressable>
+                    </View>
+                  ))}
+                </View>
+              )}
+
+              <Button
+                title={photos.length === 0 ? "Tomar foto" : "Tomar otra foto"}
+                variant="secondary"
+                onPress={onCapturePhoto}
+                icon={<Ionicons name="camera" size={20} color="#374151" />}
+              />
+
+              <Text className="text-xs text-gray-400">
+                {location
+                  ? "Cada foto se guarda con la ubicación actual."
+                  : "Sin señal de GPS: las fotos se guardan igual, sin ubicación."}
+              </Text>
+            </View>
+
             {duplicateEntry && (
               <View className="flex-row items-start gap-2 bg-amber-50 border border-amber-200 rounded-xl px-4 py-3">
                 <Ionicons name="warning-outline" size={18} color="#b45309" />
@@ -767,8 +989,12 @@ export default function ProductionEntryScreen() {
               title="Registrar producción"
               size="lg"
               onPress={handleSubmit(onSubmit, onInvalid)}
-              loading={isSubmitting || createEntry.isPending}
-              disabled={isSubmitting || createEntry.isPending}
+              loading={
+                isSubmitting || createEntry.isPending || uploadPhotos.isPending
+              }
+              disabled={
+                isSubmitting || createEntry.isPending || uploadPhotos.isPending
+              }
               icon={
                 <Ionicons name="checkmark-circle" size={20} color="white" />
               }
@@ -779,6 +1005,53 @@ export default function ProductionEntryScreen() {
             </Text>
           </CardContent>
         </Card>
+
+        {/*
+          A photo that did not make it up, with the report already saved.
+          This banner exists so the retry outlives the alert: an alert is gone
+          the moment it is tapped, and losing the only way back to the file is
+          what turns "retry the photo" into "report the shift again".
+        */}
+        {pendingUpload && (
+          <Card className="border-amber-200">
+            <CardContent className="gap-3">
+              <View className="flex-row items-start gap-2">
+                <Ionicons
+                  name="cloud-offline-outline"
+                  size={18}
+                  color="#b45309"
+                />
+                <View className="flex-1">
+                  <Text className="font-semibold text-gray-900">
+                    {pendingUpload.photos.length === 1
+                      ? "Quedó 1 foto sin subir"
+                      : `Quedaron ${pendingUpload.photos.length} fotos sin subir`}
+                  </Text>
+                  <Text className="mt-0.5 text-sm text-gray-600">
+                    La producción de {pendingUpload.label} ya está registrada.
+                    Solo falta la foto.
+                  </Text>
+                </View>
+              </View>
+
+              <View className="flex-row gap-2">
+                <Button
+                  title="Reintentar foto"
+                  size="sm"
+                  onPress={() => retryPendingUpload(pendingUpload)}
+                  loading={uploadPhotos.isPending}
+                  disabled={uploadPhotos.isPending}
+                />
+                <Button
+                  title="Descartar"
+                  size="sm"
+                  variant="secondary"
+                  onPress={() => setPendingUpload(null)}
+                />
+              </View>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Recent entries */}
         <View className="gap-3">
@@ -804,53 +1077,118 @@ export default function ProductionEntryScreen() {
             const activity = entry.budget_line_id
               ? budgetLineLabel(lineLabels?.[entry.budget_line_id])
               : null;
+            const entryPhotos = photosByEntry?.[entry.id] ?? [];
+
             return (
-              <Card key={entry.id}>
-                <CardContent className="gap-1.5">
-                  <View className="flex-row items-start justify-between gap-3">
-                    <View className="flex-1">
-                      <Text className="font-semibold text-gray-900">
-                        {formatQty(Number(entry.units_completed))}{" "}
-                        {UNIT_SUFFIX[entry.unit_type] ?? ""} ·{" "}
-                        {UNIT_TYPE_SHORT[entry.unit_type] ?? entry.unit_type}
-                      </Text>
-                      <Text className="text-xs text-gray-500 mt-0.5">
-                        {entry.work_date} ·{" "}
-                        {entry.crew?.name ?? "Sin cuadrilla"}
-                      </Text>
-                      {activity && (
-                        <Text className="text-xs text-primary-700 mt-0.5">
-                          {activity}
+              // The card opens the entry. That tap is the whole "report now,
+              // photo later" path, so it is the card and not a small chevron:
+              // a gloved thumb in the sun needs the target to be the thing it
+              // can already see.
+              <Pressable
+                key={entry.id}
+                onPress={() =>
+                  router.push(`/production/entry/${entry.id}` as never)
+                }
+                accessibilityRole="button"
+                accessibilityLabel={`Ver reporte de ${formatQty(Number(entry.units_completed))} ${UNIT_SUFFIX[entry.unit_type] ?? ""} del ${entry.work_date}`}
+              >
+                <Card>
+                  <CardContent className="gap-1.5">
+                    <View className="flex-row items-start justify-between gap-3">
+                      <View className="flex-1">
+                        <Text className="font-semibold text-gray-900">
+                          {formatQty(Number(entry.units_completed))}{" "}
+                          {UNIT_SUFFIX[entry.unit_type] ?? ""} ·{" "}
+                          {UNIT_TYPE_SHORT[entry.unit_type] ?? entry.unit_type}
+                        </Text>
+                        <Text className="text-xs text-gray-500 mt-0.5">
+                          {entry.work_date} ·{" "}
+                          {entry.crew?.name ?? "Sin cuadrilla"}
+                        </Text>
+                        {activity && (
+                          <Text className="text-xs text-primary-700 mt-0.5">
+                            {activity}
+                          </Text>
+                        )}
+                      </View>
+                      <Badge label={badge.label} variant={badge.variant} />
+                    </View>
+                    <Text className="text-xs text-gray-400">
+                      Reportó {entry.reported_by_user?.full_name ?? "—"}
+                    </Text>
+                    {entry.internal_status === "rejected" &&
+                      entry.rejection_reason && (
+                        <Text className="text-xs text-red-600">
+                          Motivo: {entry.rejection_reason}
                         </Text>
                       )}
-                    </View>
-                    <Badge label={badge.label} variant={badge.variant} />
-                  </View>
-                  <Text className="text-xs text-gray-400">
-                    Reportó {entry.reported_by_user?.full_name ?? "—"}
-                  </Text>
-                  {entry.internal_status === "rejected" &&
-                    entry.rejection_reason && (
-                      <Text className="text-xs text-red-600">
-                        Motivo: {entry.rejection_reason}
+                    {entry.overproduction_reason && (
+                      <Text className="text-xs text-amber-700">
+                        Sobre-producción: {entry.overproduction_reason}
                       </Text>
                     )}
-                  {entry.overproduction_reason && (
-                    <Text className="text-xs text-amber-700">
-                      Sobre-producción: {entry.overproduction_reason}
-                    </Text>
-                  )}
-                  {entry.notes && (
-                    <Text className="text-sm text-gray-600">{entry.notes}</Text>
-                  )}
-                </CardContent>
-              </Card>
+                    {entry.notes && (
+                      <Text className="text-sm text-gray-600">
+                        {entry.notes}
+                      </Text>
+                    )}
+
+                    {entryPhotos.length > 0 ? (
+                      <View className="mt-1">
+                        <ProductionPhotoGrid
+                          photos={entryPhotos}
+                          urls={listPhotoUrls ?? {}}
+                        />
+                      </View>
+                    ) : (
+                      <View className="mt-1 flex-row items-center gap-1">
+                        <Ionicons
+                          name="camera-outline"
+                          size={14}
+                          color="#9CA3AF"
+                        />
+                        <Text className="text-xs text-gray-400">
+                          {attachBlockedReason(entry, viewer)
+                            ? "Sin fotos"
+                            : "Sin fotos · toca para agregar"}
+                        </Text>
+                      </View>
+                    )}
+                  </CardContent>
+                </Card>
+              </Pressable>
             );
           })}
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
   );
+}
+
+/**
+ * Why a photo did not go up, for a message that already says the production is
+ * saved. So this returns only the cause — never "could not save".
+ *
+ * Takes a kind rather than the error: the thrown value is a
+ * `ProductionPhotoUploadError` whose own message is a count, so matching
+ * keywords on it only ever produced "falló la subida" (Ross, S1). The
+ * classification reads `cause`, and lives in `lib/api` where a test reaches it.
+ */
+function photoErrorMessage(kind: UploadFailureKind): string {
+  switch (kind) {
+    case "no-session":
+      return "tu sesión expiró";
+    case "no-org":
+      return "no pudimos leer tu organización";
+    case "offline":
+      return "no hay conexión";
+    case "too-large":
+      return "la foto pesa demasiado";
+    case "denied":
+      return "tu usuario no tiene permiso para adjuntarla";
+    default:
+      return "falló la subida";
+  }
 }
 
 function getErrorMessage(error: unknown): string {

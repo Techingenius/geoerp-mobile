@@ -138,6 +138,21 @@ export interface ProductionEntry
   billing_status: ProductionBillingStatus;
 }
 
+export type ProductionEntryPhotoRow = Tables<"production_entry_photos">;
+
+/**
+ * A production report's photo, with the PostGIS point cast to GeoPoint and the
+ * uploader's name from the joined profile (GRA-1134 / GRA-1135).
+ *
+ * `location` is nullable by design: a crew under canopy gets no fix, and the
+ * photo matters more than the coordinate.
+ */
+export interface ProductionEntryPhoto
+  extends Omit<ProductionEntryPhotoRow, "location"> {
+  location: GeoPoint | null;
+  uploaded_by_user?: { full_name: string | null } | null;
+}
+
 export type Crew = Tables<"crews">;
 
 // ---------------------------------------------------------------------------

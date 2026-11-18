@@ -66,6 +66,20 @@ export default function RootLayout() {
               headerBackTitle: "Volver",
             }}
           />
+          {/*
+            Registered under `production/entry/…` rather than as another
+            `production/[id]`: a two-segment route cannot collide with
+            `production/[projectId]`, so an entry id can never be read as a
+            project id.
+          */}
+          <Stack.Screen
+            name="production/entry/[entryId]"
+            options={{
+              headerShown: true,
+              title: "Reporte de producción",
+              headerBackTitle: "Volver",
+            }}
+          />
         </Stack>
         <StatusBar style="auto" />
       </QueryClientProvider>
