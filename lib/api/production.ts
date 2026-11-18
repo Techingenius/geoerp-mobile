@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "../supabase/client";
+import { segmentKeys } from "./segments";
 import type {
   Crew,
   ProductionEntry,
@@ -133,14 +134,70 @@ export function useProductionEntry(entryId: string | undefined) {
 export interface CreateProductionEntryInput {
   project_id: string;
   line_segment_id?: string | null;
+  /**
+   * The segment activity being reported — a `project_budgets` line, i.e. one
+   * Wave product. Required once the segment has planned activities; the
+   * database refuses the entry otherwise (GRA-831).
+   */
+  budget_line_id?: string | null;
   crew_id: string;
   units_completed: number;
   unit_type: UnitType;
   /** Work date as `YYYY-MM-DD`; the column is a DATE, not a timestamp. */
   work_date: string;
   notes?: string | null;
+  /** Why this entry takes the activity past its planned quantity (GRA-831). */
+  overproduction_reason?: string | null;
   /** Workers who actually worked the shift; may be empty. */
   crew_member_ids: string[];
+}
+
+/**
+ * A plan rule the database refused the entry on, in terms the screen can act
+ * on. All three come back as `check_violation` (23514) from the segment
+ * activity trigger, and telling them apart by `hint` is what turns "no se pudo
+ * guardar" into a field instruction.
+ */
+export type ProductionPlanRejection =
+  | "overproduction_reason_required"
+  | "activity_required"
+  | "activity_not_on_segment";
+
+/** Postgres check_violation. */
+const CHECK_VIOLATION = "23514";
+
+/**
+ * Which plan rule, if any, rejected this entry.
+ *
+ * The form asks for a reason itself whenever the quantity goes past what the
+ * activity has left, so reaching the overproduction branch means the remaining
+ * quantity moved underneath us — another crew reported on the same activity
+ * between the screen loading and the send.
+ */
+export function classifyPlanRejection(
+  error: unknown,
+): ProductionPlanRejection | null {
+  if (!isPostgrestError(error) || error.code !== CHECK_VIOLATION) return null;
+
+  const hint = error.hint ?? "";
+  if (hint.includes("overproduction_reason")) {
+    return "overproduction_reason_required";
+  }
+  if (hint.includes("Pass the budget line")) return "activity_required";
+  if (hint.includes("Add the activity to the segment")) {
+    return "activity_not_on_segment";
+  }
+  return null;
+}
+
+function isPostgrestError(
+  error: unknown,
+): error is { code: string; hint: string | null; message: string } {
+  return (
+    typeof error === "object" &&
+    error !== null &&
+    typeof (error as { code?: unknown }).code === "string"
+  );
 }
 
 /**
@@ -176,6 +233,7 @@ export function useCreateProductionEntry() {
       if (!session) throw new Error("No hay sesión activa");
 
       const notes = input.notes?.trim();
+      const reason = input.overproduction_reason?.trim();
 
       // No `.single()`: the function returns one `production_entries` row, so
       // PostgREST answers with the object itself. Same call shape as web and
@@ -191,6 +249,11 @@ export function useCreateProductionEntry() {
           p_crew_member_ids: input.crew_member_ids,
           p_line_segment_id: input.line_segment_id ?? undefined,
           p_notes: notes ? notes : undefined,
+          // GRA-831. Optional RPC arguments are typed as present-or-absent,
+          // not nullable: an explicit null is not the same as letting the
+          // parameter default.
+          p_budget_line_id: input.budget_line_id ?? undefined,
+          p_overproduction_reason: reason ? reason : undefined,
         },
       );
 
@@ -212,6 +275,9 @@ export function useCreateProductionEntry() {
       queryClient.invalidateQueries({
         queryKey: productionKeys.byProject(variables.project_id),
       });
+      // The entry changes what the activity has left to report, which is the
+      // suggested quantity on the next one (GRA-831).
+      queryClient.invalidateQueries({ queryKey: segmentKeys.all });
     },
   });
 }

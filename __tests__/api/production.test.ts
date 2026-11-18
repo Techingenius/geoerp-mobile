@@ -17,6 +17,7 @@ jest.mock("../../lib/supabase/client", () => ({
 
 // Imported after the mock so the module-level `supabase` binding is the stub.
 import {
+  classifyPlanRejection,
   productionKeys,
   useActiveCrews,
   useCreateProductionEntry,
@@ -24,6 +25,7 @@ import {
   useProjectProductionEntries,
   type CreateProductionEntryInput,
 } from "../../lib/api/production";
+import { segmentKeys } from "../../lib/api/segments";
 
 /**
  * The single database function the create hook writes through (GRA-832). The
@@ -265,11 +267,17 @@ describe("useCreateProductionEntry", () => {
     // approval queue reads is set server-side. A client that sent them back
     // would be claiming an authorship the database does not have to believe,
     // and would need a round trip to read the current user first.
+    // The two GRA-831 arguments are part of the set the client is allowed to
+    // send: they say which activity is billed and why the entry goes past the
+    // plan, both of which only the reporter knows. Everything the database can
+    // decide for itself stays off this list.
     expect(Object.keys(rpcParams()).sort()).toEqual([
+      "p_budget_line_id",
       "p_crew_id",
       "p_crew_member_ids",
       "p_line_segment_id",
       "p_notes",
+      "p_overproduction_reason",
       "p_project_id",
       "p_unit_type",
       "p_units_completed",
@@ -334,6 +342,62 @@ describe("useCreateProductionEntry", () => {
     });
 
     expect(rpcParams().p_notes).toBe(expected);
+  });
+
+  it.each([
+    ["passes the activity through", "line-3101", "line-3101"],
+    ["omits a null activity", null, undefined],
+    ["omits an absent activity", undefined, undefined],
+  ])("%s", async (_label, budget_line_id, expected) => {
+    mock = mockReturning();
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync({ ...entryInput, budget_line_id });
+    });
+
+    // Which of the segment's activities is billed (GRA-831). Omitted rather
+    // than null for the same reason as the segment: on a segment with no plan
+    // the function's default is what keeps the old way of reporting working.
+    expect(rpcParams().p_budget_line_id).toBe(expected);
+  });
+
+  it.each([
+    ["trims the reason", "  se extendió el bore  ", "se extendió el bore"],
+    ["omits a whitespace-only reason", "   ", undefined],
+    ["omits an absent reason", undefined, undefined],
+  ])("%s", async (_label, overproduction_reason, expected) => {
+    mock = mockReturning();
+
+    const { result } = await renderQueryHook(() => useCreateProductionEntry());
+    await act(async () => {
+      await result.current.mutateAsync({
+        ...entryInput,
+        overproduction_reason,
+      });
+    });
+
+    // A reason of spaces is no reason: the trigger reads it with btrim and
+    // would reject the entry anyway, so sending it would only turn a form
+    // error into a 400.
+    expect(rpcParams().p_overproduction_reason).toBe(expected);
+  });
+
+  it("refreshes the segment progress too, not only the entry list", async () => {
+    mock = mockReturning();
+
+    const { result, queryClient } = await renderQueryHook(() =>
+      useCreateProductionEntry(),
+    );
+    const invalidate = jest.spyOn(queryClient, "invalidateQueries");
+
+    await act(async () => {
+      await result.current.mutateAsync(entryInput);
+    });
+
+    // What the activity has left is the next report's suggested quantity, so a
+    // stale progress cache offers the field a number that was already used.
+    expect(invalidate).toHaveBeenCalledWith({ queryKey: segmentKeys.all });
   });
 
   it("returns the committed row the function answered with", async () => {
@@ -415,6 +479,38 @@ describe("useCreateProductionEntry", () => {
     expect(invalidate).toHaveBeenCalledWith({
       queryKey: productionKeys.byProject("project-1"),
     });
+  });
+});
+
+describe("classifyPlanRejection", () => {
+  const violation = (hint: string) => ({
+    code: "23514",
+    hint,
+    message: "check constraint",
+  });
+
+  it.each([
+    ["Set overproduction_reason.", "overproduction_reason_required"],
+    ["Pass the budget line of the activity being reported.", "activity_required"],
+    [
+      "Add the activity to the segment, or report against one it has.",
+      "activity_not_on_segment",
+    ],
+  ])("reads %s off the hint", (hint, expected) => {
+    expect(classifyPlanRejection(violation(hint))).toBe(expected);
+  });
+
+  it("claims nothing for another violation, another code or a plain error", () => {
+    // Branching on `hint` and not on the message: an unrecognised violation has
+    // to fall through to the generic error path, not be guessed at. The screen
+    // turns each of these into a different instruction, and the wrong one sends
+    // a crew lead looking for a field that is already filled in.
+    expect(classifyPlanRejection(violation("something else"))).toBeNull();
+    expect(
+      classifyPlanRejection({ code: "42501", hint: null, message: "denied" }),
+    ).toBeNull();
+    expect(classifyPlanRejection(new Error("network"))).toBeNull();
+    expect(classifyPlanRejection(null)).toBeNull();
   });
 });
 

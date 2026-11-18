@@ -10,6 +10,7 @@ import {
 import { useLocalSearchParams } from "expo-router";
 import { Ionicons } from "@expo/vector-icons";
 import { useProductionEntry } from "../../../lib/api/production";
+import { formatQty, UNIT_SUFFIX } from "../../../lib/api/segments";
 import {
   attachBlockedReason,
   canRemoveProductionPhoto,
@@ -39,6 +40,7 @@ const UNIT_TYPE_SHORT: Record<UnitType, string> = {
   aerial_ft: "aéreo",
   duct_ft: "ducto",
   trenching_ft: "zanja",
+  unit: "unidades",
 };
 
 const STATUS_BADGE: Record<
@@ -224,7 +226,8 @@ export default function ProductionEntryDetailScreen() {
           <View className="flex-row items-start justify-between gap-3">
             <View className="flex-1">
               <Text className="text-xl font-bold text-gray-900">
-                {entry.units_completed} ft ·{" "}
+                {formatQty(Number(entry.units_completed))}{" "}
+                {UNIT_SUFFIX[entry.unit_type] ?? ""} ·{" "}
                 {UNIT_TYPE_SHORT[entry.unit_type] ?? entry.unit_type}
               </Text>
               <Text className="mt-0.5 text-sm text-gray-500">

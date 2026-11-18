@@ -51,6 +51,14 @@ export default function RootLayout() {
             }}
           />
           <Stack.Screen
+            name="segments/[projectId]"
+            options={{
+              headerShown: true,
+              title: "Mis tramos",
+              headerBackTitle: "Volver",
+            }}
+          />
+          <Stack.Screen
             name="production/[projectId]"
             options={{
               headerShown: true,

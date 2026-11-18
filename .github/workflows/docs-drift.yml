@@ -1,0 +1,43 @@
+name: Docs Drift
+
+# Advisory docs-drift detector (GRA-966 · A19). Reads the PR's `Docs:` line and
+# `.github/doc-map.yml`, and annotates the PR when code that a doc page describes
+# changed without that page. It never fails: `continue-on-error` plus a script
+# that exits 0 on findings. It is NOT a required check and must not become one —
+# during a billing outage it dies with the rest of Actions. This repo has no
+# `scripts/ci-local.sh` yet, so run it by hand then
+# (`PR_BODY="Docs: ..." python3 scripts/docs-drift.py --base origin/main`); the
+# weekly docs autopilot is the real safety net.
+#
+# Not watched by `multica-ci-bridge.yml` (that one lists its workflows by name),
+# so this never rings an agent.
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+concurrency:
+  group: docs-drift-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  docs-drift:
+    name: docs-drift (advisory)
+    runs-on: ubuntu-latest
+    timeout-minutes: 3
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Detect docs drift
+        env:
+          # Passed through env, never interpolated into the script: the body is user input.
+          PR_BODY: ${{ github.event.pull_request.body }}
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 scripts/docs-drift.py --base "$BASE_SHA" --head HEAD

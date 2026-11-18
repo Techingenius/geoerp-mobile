@@ -3,9 +3,11 @@
  *
  * Every test runs twice, once with `Platform.OS` pinned to ios and once to
  * android, because the rule in this repo is that nothing ships verified on one
- * platform only. The suite covers `lib/api/` — guards and mappers with no
- * native surface — so today both passes assert the same thing; the point is
- * that the day one of them stops doing so, the suite says which platform.
+ * platform only. The suite covers `lib/api/` and `lib/utils/` — guards, mappers
+ * and geometry helpers with no native surface — plus the screen behaviour that
+ * can be exercised over a mocked native module. Today both passes assert the
+ * same thing; the point is that the day one of them stops doing so, the suite
+ * says which platform.
  *
  * The `web` project is deliberately absent: the app does not ship on web.
  */
@@ -21,5 +23,5 @@ module.exports = {
     { ...project, displayName: "ios", preset: "jest-expo/ios" },
     { ...project, displayName: "android", preset: "jest-expo/android" },
   ],
-  collectCoverageFrom: ["lib/api/**/*.ts"],
+  collectCoverageFrom: ["lib/api/**/*.ts", "lib/utils/**/*.ts"],
 };
