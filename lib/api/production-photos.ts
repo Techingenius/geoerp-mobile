@@ -317,24 +317,40 @@ export type UploadFailureKind =
   | "too-large"
   | "unknown";
 
+interface ErrorParts {
+  /** Prose, for the phrases only a message can carry. */
+  text: string;
+  /** Status and error codes, compared whole — never searched for. */
+  codes: string[];
+}
+
 /**
- * Everything the thrown value can say about itself, lowercased.
+ * Split what the thrown value says into prose and codes.
  *
  * Three shapes arrive here and only one of them is an `Error`: Storage answers
  * with a `StorageApiError`, PostgREST with a bare object carrying `message`
  * and `code` (`42501` for an RLS denial), and this module's own guards with a
  * plain `Error`. Reading `.message` off an `instanceof Error` check alone
  * misses the PostgREST case, which is exactly the one worth telling apart.
+ *
+ * Codes are kept apart from prose on purpose: searching one joined string for
+ * `"403"` also matches a message that happens to contain those digits, and a
+ * false `denied` is not cosmetic — it takes the retry button away (Ross, N3).
  */
-function errorSignals(error: unknown): string {
-  if (typeof error === "string") return error.toLowerCase();
-  if (!error || typeof error !== "object") return "";
+function errorParts(error: unknown): ErrorParts {
+  if (typeof error === "string") return { text: error.toLowerCase(), codes: [] };
+  if (!error || typeof error !== "object") return { text: "", codes: [] };
 
   const e = error as Record<string, unknown>;
-  return [e.message, e.code, e.statusCode, e.status, e.error]
-    .filter((part) => typeof part === "string" || typeof part === "number")
+  const text = [e.message, e.error]
+    .filter((part) => typeof part === "string")
     .join(" ")
     .toLowerCase();
+  const codes = [e.code, e.statusCode, e.status]
+    .filter((part) => typeof part === "string" || typeof part === "number")
+    .map((part) => String(part));
+
+  return { text, codes };
 }
 
 /**
@@ -349,7 +365,12 @@ function errorSignals(error: unknown): string {
 export function classifyUploadFailure(error: unknown): UploadFailureKind {
   const cause =
     error instanceof ProductionPhotoUploadError ? (error.cause ?? error) : error;
-  const text = errorSignals(cause) || errorSignals(error);
+  // Fall back to the wrapper when the cause says nothing about itself — a
+  // thrown string, or an object with neither message nor code.
+  const fromCause = errorParts(cause);
+  const { text, codes } =
+    fromCause.text || fromCause.codes.length ? fromCause : errorParts(error);
+  const has = (code: string) => codes.includes(code);
 
   if (text.includes("no hay sesión activa")) return "no-session";
   if (text.includes("no se pudo obtener la organización")) return "no-org";
@@ -357,8 +378,8 @@ export function classifyUploadFailure(error: unknown): UploadFailureKind {
     text.includes("row-level security") ||
     text.includes("permission denied") ||
     text.includes("unauthorized") ||
-    text.includes("42501") ||
-    text.includes("403")
+    has("42501") ||
+    has("403")
   ) {
     return "denied";
   }
@@ -366,7 +387,7 @@ export function classifyUploadFailure(error: unknown): UploadFailureKind {
     text.includes("exceeded the maximum") ||
     text.includes("too large") ||
     text.includes("payload too large") ||
-    text.includes("413")
+    has("413")
   ) {
     return "too-large";
   }

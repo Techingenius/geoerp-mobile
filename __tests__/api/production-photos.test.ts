@@ -812,6 +812,31 @@ describe("classifyUploadFailure", () => {
     ).toBe("offline");
   });
 
+  it("does not read a denial out of digits that happen to be in the message", () => {
+    // The whole point of keeping codes apart from prose: a message carrying
+    // "403" for some other reason used to classify as `denied`, and `denied`
+    // is the kind that takes the retry button away (Ross, N3).
+    expect(
+      classifyUploadFailure({
+        message: "upload aborted after 403 ms waiting for the network",
+        code: "XX000",
+      }),
+    ).not.toBe("denied");
+
+    expect(
+      classifyUploadFailure({ message: "413 bytes written, then EPIPE" }),
+    ).not.toBe("too-large");
+  });
+
+  it("matches a status code whole, wherever the client puts it", () => {
+    expect(classifyUploadFailure({ message: "nope", statusCode: 403 })).toBe(
+      "denied",
+    );
+    expect(classifyUploadFailure({ message: "nope", status: "413" })).toBe(
+      "too-large",
+    );
+  });
+
   it("recognises a file the bucket refuses as too large", () => {
     expect(
       classifyUploadFailure(

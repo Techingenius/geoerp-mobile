@@ -573,7 +573,11 @@ export default function ProductionEntryScreen() {
           entryId: entry.id,
           projectId,
           photos: failed,
-          label: `${values.units_completed} ft · ${values.work_date}`,
+          // The unit the entry was actually written with, not "ft":
+          // since GRA-831 an activity can be measured in `unit`, and a
+          // banner reading "12 ft" for 12 units names the wrong report
+          // back to the reporter (Ross, N4).
+          label: `${formatQty(Number(values.units_completed))} ${UNIT_SUFFIX[effectiveUnit]} · ${values.work_date}`,
         };
         setPendingUpload(pending);
 
