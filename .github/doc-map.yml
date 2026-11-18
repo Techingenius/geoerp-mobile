@@ -1,0 +1,34 @@
+# doc-map.yml — qué código describe cada documento (GRA-966 · A19).
+#
+# Lo lee scripts/docs-drift.py: si un PR cambia algo de `code` y no toca `docs`,
+# avisa (advisory, nunca bloquea). Formato restringido: listas de globs, `**`
+# cruza carpetas y `*` no. Si agregás un documento, sumalo acá en el mismo PR.
+#
+# El revisor del gate de docs de un documento es el autor del último PR mergeado
+# que tocó sus paths de `code` (suplente: Ross).
+
+# Todo lo que cuenta como "cambió la documentación".
+docs_roots:
+  - docs/**
+  - "**/README.md"
+  - CLAUDE.md
+
+# geoerp-mobile todavía no tiene carpeta de ADR: `Docs: ADR` no se verifica.
+adr:
+
+# geoerp-mobile todavía no tiene documentación de usuario con avisos `Hoy:`.
+notice_roots:
+
+pages:
+  # CLAUDE.md es hoy la guía de desarrollo: setup, builds EAS y configuración.
+  - docs: CLAUDE.md
+    code:
+      - app.config.ts
+      - app.json
+      - eas.json
+      - package.json
+      - .github/workflows/preview-build.yml
+
+  - docs: .github/scripts/README.md
+    code:
+      - .github/scripts/**
